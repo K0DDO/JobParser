@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 from app.core.timeutil import msk_isoformat
 
@@ -38,6 +38,7 @@ class VacancyData(BaseModel):
     salary_from: int | None = None
     salary_to: int | None = None
     currency: str | None = None
+    salary_period: str | None = None  # hourly|daily|weekly|monthly|yearly
     city: str | None = None
     remote: bool = False
     work_format: str = "unknown"
@@ -48,6 +49,41 @@ class VacancyData(BaseModel):
     contacts: dict[str, Any] | None = None
     raw_data: dict[str, Any] | None = None
     source_metadata: dict[str, Any] | None = None
+
+    @field_validator("employment_type", mode="before")
+    @classmethod
+    def _employment_type_str(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, list):
+            value = next((x for x in value if x), None)
+        if value is None:
+            return None
+        return str(value).strip() or None
+
+    @field_validator("salary_period", mode="before")
+    @classmethod
+    def _salary_period_str(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, (list, tuple)):
+            value = next((x for x in value if x), None)
+        if value is None:
+            return None
+        return str(value).strip() or None
+
+    @field_validator("city", mode="before")
+    @classmethod
+    def _city_str(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, list):
+            value = next((x for x in value if x), None)
+        if isinstance(value, dict):
+            value = value.get("name") or value.get("city") or value.get("label")
+        if value is None:
+            return None
+        return str(value).strip() or None
 
 
 class VacancyOut(_MskJsonMixin):
@@ -89,6 +125,7 @@ class VacancyListResponse(BaseModel):
 class VacancyFilterOptions(BaseModel):
     cities: list[str]
     skills: list[str]
+    companies: list[str] = []
 
 
 class SearchProfileCreate(BaseModel):

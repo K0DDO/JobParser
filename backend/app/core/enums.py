@@ -8,6 +8,14 @@ class SourceName(StrEnum):
     HIRIFY = "hirify"
     TALANTO = "talanto"
     GETMATCH = "getmatch"
+    REMOTEOK = "remoteok"
+    REMOTIVE = "remotive"
+    HIMALAYAS = "himalayas"
+    JOBICY = "jobicy"
+    ARBEITNOW = "arbeitnow"
+    WEWORKREMOTELY = "weworkremotely"
+    WORKINGNOMADS = "workingnomads"
+    GREENHOUSE = "greenhouse"
 
 
 class VacancyStatus(StrEnum):

@@ -121,6 +121,7 @@ class HabrSource(VacancySource):
             salary_from=salary.get("from"),
             salary_to=salary.get("to"),
             currency=currency,
+            salary_period="monthly",
             city=city,
             remote=remote,
             work_format=work_format,

@@ -139,6 +139,7 @@ class HHSource(VacancySource):
             salary_from=salary.get("from"),
             salary_to=salary.get("to"),
             currency=salary.get("currency"),
+            salary_period="monthly",
             city=area.get("name"),
             remote=remote,
             work_format=work_format,

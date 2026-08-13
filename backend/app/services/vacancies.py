@@ -164,7 +164,7 @@ def build_vacancy_filters(
     currency: str | None = None,
     skill: str | list[str] | None = None,
     role: str | list[str] | None = None,
-    company: str | None = None,
+    company: str | list[str] | None = None,
     max_age_hours: int | None = None,
     has_salary: bool | None = None,
     employment_type: str | list[str] | None = None,
@@ -179,6 +179,7 @@ def build_vacancy_filters(
     skills = _as_list(skill)
     roles = _as_list(role)
     employment_types = _as_list(employment_type)
+    companies = _as_list(company)
 
     if sources:
         filters.append(Vacancy.source.in_(sources))
@@ -238,8 +239,8 @@ def build_vacancy_filters(
         filters.append(or_(*skill_clauses))
     if roles:
         filters.append(or_(*[Vacancy.title.ilike(f"%{r}%") for r in roles]))
-    if company:
-        filters.append(Vacancy.company.ilike(f"%{company}%"))
+    if companies:
+        filters.append(or_(*[Vacancy.company.ilike(f"%{c}%") for c in companies]))
     if has_salary is True:
         filters.append(or_(Vacancy.salary_from.is_not(None), Vacancy.salary_to.is_not(None)))
     if has_salary is False:
@@ -279,7 +280,7 @@ async def list_vacancies(
     currency: str | None = None,
     skill: str | list[str] | None = None,
     role: str | list[str] | None = None,
-    company: str | None = None,
+    company: str | list[str] | None = None,
     max_age_hours: int | None = None,
     has_salary: bool | None = None,
     employment_type: str | list[str] | None = None,
@@ -381,6 +382,16 @@ async def get_filter_options(session: AsyncSession) -> dict[str, list[str]]:
             .limit(40)
         )
     ).all()
+    company_rows = (
+        await session.execute(
+            select(Vacancy.company, func.count(Vacancy.id))
+            .where(Vacancy.company.is_not(None))
+            .where(Vacancy.company != "")
+            .group_by(Vacancy.company)
+            .order_by(func.count(Vacancy.id).desc())
+            .limit(50)
+        )
+    ).all()
     skill_col = func.unnest(Vacancy.skills).label("skill")
     skill_rows = (
         await session.execute(
@@ -393,5 +404,6 @@ async def get_filter_options(session: AsyncSession) -> dict[str, list[str]]:
     ).all()
     return {
         "cities": [row[0] for row in city_rows if row[0]],
+        "companies": [row[0] for row in company_rows if row[0]],
         "skills": [row[0] for row in skill_rows if row[0]],
     }

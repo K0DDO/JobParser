@@ -1,0 +1,3 @@
+Company logos (PNG): https://toplogos.ru/ — reference catalog; trademarks belong to brand owners.
+Tech icons (SVG): Simple Icons (https://simpleicons.org/) via CDN / jsDelivr.
+Icons8 sample used during sourcing: https://icons8.ru/icons

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import 'api_client.dart';
@@ -5,7 +7,9 @@ import 'vacancy_filters.dart';
 import '../models/models.dart';
 
 class AppState extends ChangeNotifier {
-  AppState(this.api);
+  AppState(this.api) {
+    _startAutoRefresh();
+  }
 
   final ApiClient api;
 
@@ -23,10 +27,60 @@ class AppState extends ChangeNotifier {
   final VacancyFilters vacancyFilters = VacancyFilters();
   int vacanciesTotal = 0;
   List<String> filterCities = [];
+  List<String> filterCompanies = [];
   List<String> filterSkills = [];
+
+  Timer? _pollTimer;
+  String? _knownLastSyncAt;
+  bool _pollBusy = false;
+
+  void _startAutoRefresh() {
+    _pollTimer?.cancel();
+    // Pull dashboard/vacancies when background sync finishes (or every ~45s).
+    _pollTimer = Timer.periodic(const Duration(seconds: 45), (_) => _pollBackend());
+  }
+
+  Future<void> _pollBackend() async {
+    if (_pollBusy || syncing || loading) return;
+    _pollBusy = true;
+    try {
+      final status = await api.get('/sync/status') as Map<String, dynamic>;
+      final inProgress = status['sync_in_progress'] as bool? ?? false;
+      final lastRaw = status['last_sync_at'] as String?;
+
+      if (inProgress) {
+        await loadDashboard();
+        return;
+      }
+
+      if (lastRaw != null && lastRaw != _knownLastSyncAt) {
+        _knownLastSyncAt = lastRaw;
+        await Future.wait([
+          loadDashboard(),
+          loadVacancies(),
+          loadFilterOptions(),
+          loadSources(),
+          loadLogs(),
+        ]);
+      } else {
+        await loadDashboard();
+      }
+    } catch (_) {
+      // Silent poll failures — manual refresh still works.
+    } finally {
+      _pollBusy = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
+  }
 
   Future<void> bootstrap() async {
     await refreshAll();
+    _knownLastSyncAt = (await api.get('/sync/status') as Map<String, dynamic>)['last_sync_at'] as String?;
   }
 
   Future<void> refreshAll() async {
@@ -68,6 +122,7 @@ class AppState extends ChangeNotifier {
   Future<void> loadFilterOptions() async {
     final data = await api.get('/vacancies/options') as Map<String, dynamic>;
     filterCities = (data['cities'] as List?)?.map((e) => e.toString()).toList() ?? [];
+    filterCompanies = (data['companies'] as List?)?.map((e) => e.toString()).toList() ?? [];
     filterSkills = (data['skills'] as List?)?.map((e) => e.toString()).toList() ?? [];
     notifyListeners();
   }
@@ -125,6 +180,7 @@ class AppState extends ChangeNotifier {
         if (!inProgress) break;
       }
       await refreshAll();
+      _knownLastSyncAt = (await api.get('/sync/status') as Map<String, dynamic>)['last_sync_at'] as String?;
     } catch (e) {
       error = e.toString();
       notifyListeners();

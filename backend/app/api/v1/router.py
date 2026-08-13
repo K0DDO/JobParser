@@ -133,7 +133,7 @@ async def get_vacancies(
     currency: str | None = None,
     skill: str | None = Query(None, description="Comma-separated skills"),
     role: str | None = Query(None, description="Comma-separated roles"),
-    company: str | None = None,
+    company: str | None = Query(None, description="Comma-separated companies"),
     max_age_hours: int | None = Query(None, ge=1),
     has_salary: bool | None = None,
     employment_type: str | None = Query(None, description="Comma-separated employment types"),
@@ -391,6 +391,7 @@ async def update_settings(
     await db.refresh(settings)
     if body.sync_interval_minutes is not None:
         await reschedule_from_db()
+        await db.refresh(settings)
     return SettingsOut.model_validate(settings)
 
 

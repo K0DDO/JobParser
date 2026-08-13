@@ -9,9 +9,9 @@ class VacancyFilters {
   int? salaryTo;
   String? currency;
   List<String> cities;
+  List<String> companies;
   List<String> skills;
   List<String> roles;
-  String? company;
   int? maxAgeHours;
   bool? hasSalary;
   List<String> employmentTypes;
@@ -29,9 +29,9 @@ class VacancyFilters {
     this.salaryTo,
     this.currency,
     List<String>? cities,
+    List<String>? companies,
     List<String>? skills,
     List<String>? roles,
-    this.company,
     this.maxAgeHours,
     this.hasSalary,
     List<String>? employmentTypes,
@@ -43,6 +43,7 @@ class VacancyFilters {
         statuses = statuses ?? [],
         applicationStatuses = applicationStatuses ?? [],
         cities = cities ?? [],
+        companies = companies ?? [],
         skills = skills ?? [],
         roles = roles ?? [],
         employmentTypes = employmentTypes ?? [],
@@ -60,9 +61,9 @@ class VacancyFilters {
     if (salaryTo != null) n++;
     if (currency != null) n++;
     n += cities.length;
+    n += companies.length;
     n += skills.length;
     n += roles.length;
-    if (company != null && company!.isNotEmpty) n++;
     if (maxAgeHours != null) n++;
     if (hasSalary != null) n++;
     n += employmentTypes.length;
@@ -101,9 +102,9 @@ class VacancyFilters {
     if (salaryTo != null) query['salary_to'] = '$salaryTo';
     if (currency != null) query['currency'] = currency!;
     if (cities.isNotEmpty) query['city'] = cities.join(',');
+    if (companies.isNotEmpty) query['company'] = companies.join(',');
     if (skills.isNotEmpty) query['skill'] = skills.join(',');
     if (roles.isNotEmpty) query['role'] = roles.join(',');
-    if (company != null && company!.isNotEmpty) query['company'] = company!;
     if (maxAgeHours != null) query['max_age_hours'] = '$maxAgeHours';
     if (hasSalary != null) query['has_salary'] = hasSalary! ? 'true' : 'false';
     if (employmentTypes.isNotEmpty) query['employment_type'] = employmentTypes.join(',');
@@ -122,9 +123,9 @@ class VacancyFilters {
     salaryTo = null;
     currency = null;
     cities.clear();
+    companies.clear();
     skills.clear();
     roles.clear();
-    company = null;
     maxAgeHours = null;
     hasSalary = null;
     employmentTypes.clear();

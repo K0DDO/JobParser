@@ -57,6 +57,7 @@ def normalize_hirify_item(item: dict[str, Any]) -> VacancyData:
         salary_from=salary_from,
         salary_to=salary_to,
         currency=currency,
+        salary_period="monthly",
         city=city,
         remote=work_format == WorkFormat.REMOTE,
         work_format=work_format,

@@ -22,7 +22,7 @@ from app.services.settings_service import compute_next_sync, get_or_create_setti
 
 logger = logging.getLogger(__name__)
 
-STALE_SYNC_MINUTES = 20
+STALE_SYNC_MINUTES = 8
 
 
 async def clear_stale_sync_lock(session: AsyncSession) -> bool:
@@ -130,7 +130,13 @@ async def run_sync(*, triggered_by: str = "scheduler") -> dict:
                 found = 0
                 created_count = 0
                 for data in vacancies_data:
-                    vacancy, created = await upsert_vacancy(session, data)
+                    try:
+                        async with session.begin_nested():
+                            vacancy, created = await upsert_vacancy(session, data)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("Skip vacancy %s/%s: %s", data.source, data.source_vacancy_id, exc)
+                        stats["errors"].append(f"{source_cfg.display_name}: skip {data.title[:80]} ({exc})")
+                        continue
                     found += 1
                     stats["fetched"] += 1
                     if created:
@@ -239,6 +245,8 @@ async def run_sync(*, triggered_by: str = "scheduler") -> dict:
         async with AsyncSessionLocal() as session:
             settings = await get_or_create_settings(session)
             settings.system_status = "error"
+            settings.last_sync_at = utc_now_naive()
+            settings.next_sync_at = compute_next_sync(settings)
             await add_log(session, f"Sync failed: {exc}", level="error", category="sync")
             await session.commit()
         stats["errors"].append(str(exc))

@@ -50,8 +50,7 @@ class VacanciesScreen extends StatelessWidget {
                           crossAxisCount: cols,
                           mainAxisSpacing: 8,
                           crossAxisSpacing: 8,
-                          // Fixed short height — no empty middle gap
-                          mainAxisExtent: cols == 1 ? 160 : 170,
+                          mainAxisExtent: cols == 1 ? 148 : 152,
                         ),
                         itemCount: state.vacancies.length,
                         itemBuilder: (context, i) => _VacancyCard(vacancy: state.vacancies[i]),
@@ -91,10 +90,10 @@ class _VacancyCard extends StatelessWidget {
     final orig = vacancy.originalCurrency;
     final note = (orig != null && orig != 'RUB' && orig != 'RUR') ? ' · $orig' : '';
     if (from != null && to != null) {
-      return '${_money(from)} – ${_money(to)} ₽$note';
+      return '${_money(from)} – ${_money(to)} ₽ / мес$note';
     }
-    if (from != null) return 'от ${_money(from)} ₽$note';
-    return 'до ${_money(to!)} ₽$note';
+    if (from != null) return 'от ${_money(from)} ₽ / мес$note';
+    return 'до ${_money(to!)} ₽ / мес$note';
   }
 
   String _exp() => switch (vacancy.experience) {
@@ -109,8 +108,9 @@ class _VacancyCard extends StatelessWidget {
   String _age() => MskTime.ageLabel(vacancy.publishedAt);
 
   Color _statusColor(String? s) => switch (s) {
+        'new' => AppTheme.success,
         'applied' || 'dry_run' => AppTheme.accent,
-        'response' || 'viewed' || 'interview' || 'matched' => AppTheme.success,
+        'response' || 'viewed' || 'interview' || 'matched' => AppTheme.accentAlt,
         'rejected' || 'failed' => AppTheme.danger,
         'ignored' => AppTheme.muted,
         _ => AppTheme.warning,
@@ -142,7 +142,7 @@ class _VacancyCard extends StatelessWidget {
         children: [
           if (skills.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.only(bottom: 5),
+              padding: const EdgeInsets.only(bottom: 4),
               child: Text(
                 skills.join('  ·  '),
                 maxLines: 1,
@@ -163,8 +163,9 @@ class _VacancyCard extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11),
           ),
-          const SizedBox(height: 5),
+          const Spacer(),
           Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               _pill(status, color),
               const SizedBox(width: 5),
@@ -173,54 +174,54 @@ class _VacancyCard extends StatelessWidget {
                 const SizedBox(width: 5),
                 const Icon(Icons.check_circle, size: 13, color: AppTheme.success),
               ],
-            ],
-          ),
-          const SizedBox(height: 4),
-          Align(
-            alignment: Alignment.centerRight,
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: Alignment.centerRight,
-              child: Text(
-                _salary(),
-                maxLines: 1,
-                softWrap: false,
-                textAlign: TextAlign.right,
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 12.5,
-                  height: 1.1,
-                  color: (vacancy.salaryFrom != null || vacancy.salaryTo != null)
-                      ? AppTheme.salary
-                      : AppTheme.muted,
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _salary(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.right,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                    height: 1,
+                    color: (vacancy.salaryFrom != null || vacancy.salaryTo != null)
+                        ? AppTheme.salary
+                        : AppTheme.muted,
+                  ),
                 ),
               ),
-            ),
+            ],
           ),
           const SizedBox(height: 6),
           Row(
             children: [
               Expanded(
                 child: SizedBox(
-                  height: 28,
+                  height: 24,
                   child: ElevatedButton(
                     style: ElevatedButton.styleFrom(
                       padding: EdgeInsets.zero,
-                      textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      visualDensity: VisualDensity.compact,
+                      textStyle: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700),
                     ),
                     onPressed: () => state.applyVacancy(vacancy.id),
                     child: const Text('Отклик'),
                   ),
                 ),
               ),
-              const SizedBox(width: 5),
               Expanded(
                 child: SizedBox(
-                  height: 28,
+                  height: 24,
                   child: OutlinedButton(
                     style: OutlinedButton.styleFrom(
                       padding: EdgeInsets.zero,
-                      textStyle: const TextStyle(fontSize: 12),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      visualDensity: VisualDensity.compact,
+                      textStyle: const TextStyle(fontSize: 11.5),
                     ),
                     onPressed: () => launchUrl(Uri.parse(vacancy.url), mode: LaunchMode.externalApplication),
                     child: const Text('Открыть'),
@@ -228,14 +229,15 @@ class _VacancyCard extends StatelessWidget {
                 ),
               ),
               SizedBox(
-                width: 28,
-                height: 28,
+                width: 24,
+                height: 24,
                 child: IconButton(
                   tooltip: 'Игнорировать',
                   padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
                   visualDensity: VisualDensity.compact,
                   onPressed: () => state.ignoreVacancy(vacancy.id),
-                  icon: const Icon(Icons.close, size: 16, color: AppTheme.muted),
+                  icon: const Icon(Icons.close, size: 15, color: AppTheme.muted),
                 ),
               ),
             ],

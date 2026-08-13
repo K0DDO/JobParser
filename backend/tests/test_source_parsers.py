@@ -116,3 +116,139 @@ def test_getmatch_offers_normalize():
     assert data.salary_from == 180000
     assert data.salary_to == 250000
     assert "Python" in data.skills
+
+
+def test_remoteok_normalize_skips_legal_banner():
+    from app.parsers.remoteok import normalize_remoteok_item
+
+    assert normalize_remoteok_item({"legal": "terms"}) is None
+    data = normalize_remoteok_item(
+        {
+            "id": "99",
+            "slug": "remote-python-99",
+            "position": "Python Dev",
+            "company": "Acme",
+            "tags": ["python", "backend"],
+            "epoch": 1700000000,
+            "url": "https://remoteok.com/remote-jobs/remote-python-99",
+        }
+    )
+    assert data is not None
+    assert data.source == "remoteok"
+    assert data.remote is True
+    assert "python" in data.skills
+
+
+def test_himalayas_normalize():
+    from app.parsers.himalayas import normalize_himalayas_item
+
+    data = normalize_himalayas_item(
+        {
+            "title": "Python Developer",
+            "companyName": "Hitapps",
+            "applicationLink": "https://himalayas.app/companies/hitapps/jobs/python-developer",
+            "minSalary": 5000,
+            "maxSalary": 6500,
+            "salaryPeriod": "monthly",
+            "currency": "USD",
+            "seniority": ["Senior"],
+            "categories": ["Python-Development"],
+            "locationRestrictions": [],
+            "pubDate": 1700000000,
+            "employmentType": "Full Time",
+        }
+    )
+    assert data.source == "himalayas"
+    assert data.salary_from == 5000
+    assert data.salary_period == "monthly"
+    assert data.experience == ExperienceLevel.BETWEEN_3_AND_6
+
+
+def test_jobicy_accepts_list_job_type():
+    from app.parsers.jobicy import normalize_jobicy_item
+
+    data = normalize_jobicy_item(
+        {
+            "id": 42,
+            "jobSlug": "python-dev",
+            "jobTitle": "Python Dev",
+            "companyName": "Acme",
+            "jobGeo": "Remote",
+            "jobType": ["Full-Time", "Contract"],
+            "jobIndustry": ["Software Engineering"],
+            "pubDate": 1700000000,
+        }
+    )
+    assert data.employment_type == "Full-Time"
+    assert "Software Engineering" in data.skills
+
+
+def test_workingnomads_normalize_yearly_and_hourly():
+    from app.parsers.workingnomads import normalize_workingnomads_item
+    from app.services.normalize import normalize_vacancy
+
+    yearly = normalize_workingnomads_item(
+        {
+            "id": 1789464,
+            "slug": "associate-infrastructure-engineer-webflow",
+            "title": "Associate Infrastructure Engineer",
+            "company": "Webflow",
+            "category_name": "Development",
+            "position_type": "ft",
+            "experience_level": "MID_LEVEL",
+            "tags": ["python", "aws"],
+            "locations": ["USA", "Canada"],
+            "location_base": "USA,Canada",
+            "pub_date": "2026-08-13T00:32:25.523477-04:00",
+            "apply_url": "https://webflow.com/careers/infra",
+            "annual_salary_usd": 190000,
+            "salary_range": "$140k-$190k per year",
+        }
+    )
+    assert yearly is not None
+    assert yearly.source == "workingnomads"
+    assert yearly.remote is True
+    assert yearly.company == "Webflow"
+    assert yearly.employment_type == "Full-time"
+    assert yearly.experience == ExperienceLevel.BETWEEN_1_AND_3
+    monthly = normalize_vacancy(yearly)
+    assert monthly.salary_from == 11667
+    assert monthly.salary_to == 15833
+    assert monthly.salary_period == "monthly"
+
+    hourly = normalize_workingnomads_item(
+        {
+            "id": 42,
+            "slug": "housing-support",
+            "title": "Housing Support Specialist",
+            "company": "Sedgwick",
+            "position_type": "pt",
+            "experience_level": "SENIOR_LEVEL",
+            "salary_range": "$17 per hour",
+            "annual_salary_usd": 35360,
+            "location_base": "USA",
+        }
+    )
+    assert hourly is not None
+    converted = normalize_vacancy(hourly)
+    assert converted.salary_from == 17 * 8 * 22
+    assert converted.experience == ExperienceLevel.BETWEEN_3_AND_6
+
+
+def test_greenhouse_normalize():
+    from app.parsers.greenhouse import normalize_greenhouse
+
+    data = normalize_greenhouse(
+        "GitLab",
+        {
+            "id": 123,
+            "title": "Backend Engineer",
+            "absolute_url": "https://job-boards.greenhouse.io/gitlab/jobs/123",
+            "location": {"name": "Remote"},
+            "updated_at": "2026-08-10T16:52:46-04:00",
+            "company_name": "GitLab",
+        },
+    )
+    assert data.source == "greenhouse"
+    assert data.remote is True
+    assert data.company == "GitLab"

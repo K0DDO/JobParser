@@ -2,29 +2,37 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 class AppTheme {
-  // Dual brand: orange #F5983C + magenta #E55AE7 on warm charcoal
-  static const bg = Color(0xFF100D12);
-  static const surface = Color(0xFF1A141C);
-  static const surfaceAlt = Color(0xFF241C28);
-  static const border = Color(0xFF3A2E42);
-  static const textPrimary = Color(0xFFF6ECF4);
-  static const textSecondary = Color(0xFFB09AAD);
-  static const accent = Color(0xFFF5983C);
-  static const accentSoft = Color(0xFFC4742A);
-  static const accentAlt = Color(0xFFE55AE7);
-  static const success = Color(0xFF5ED9A0);
-  static const warning = Color(0xFFF5983C);
-  static const danger = Color(0xFFFF6B7A);
-  static const muted = Color(0xFF7A6A7C);
-  static const salary = Color(0xFFE55AE7);
-  static const chip = Color(0xFF2A2130);
+  // Muted coral + soft mauve on warm charcoal
+  static const bg = Color(0xFF12100F);
+  static const surface = Color(0xFF1C1817);
+  static const surfaceAlt = Color(0xFF26201E);
+  static const border = Color(0xFF3D342F);
+  static const textPrimary = Color(0xFFF3EBE6);
+  static const textSecondary = Color(0xFFAFA099);
+  static const accent = Color(0xFFD9927A);
+  static const accentSoft = Color(0xFFB8745F);
+  static const accentAlt = Color(0xFFC98FA8);
+  static const success = Color(0xFF5CB88A);
+  static const warning = Color(0xFFD9927A);
+  static const danger = Color(0xFFD97A7A);
+  static const muted = Color(0xFF857870);
+  static const salary = Color(0xFFC98FA8);
+  static const chip = Color(0xFF2A2421);
 
   static Color sourceColor(String source) => switch (source.toLowerCase()) {
-        'habr' => const Color(0xFFF5983C),
-        'hirify' => const Color(0xFFE55AE7),
-        'talanto' => const Color(0xFFFFB86B),
-        'getmatch' => const Color(0xFFD46BE8),
-        'hh' => const Color(0xFFFF7A5C),
+        'habr' => const Color(0xFFD9927A),
+        'hirify' => const Color(0xFFC98FA8),
+        'talanto' => const Color(0xFFD4A88A),
+        'getmatch' => const Color(0xFFBFA0B0),
+        'hh' => const Color(0xFFD98A7A),
+        'remoteok' => const Color(0xFF7A9FD9),
+        'remotive' => const Color(0xFF7AD9B0),
+        'himalayas' => const Color(0xFF9B7AD9),
+        'jobicy' => const Color(0xFFD9C27A),
+        'arbeitnow' => const Color(0xFF7AC5D9),
+        'weworkremotely' => const Color(0xFFD97AAB),
+        'workingnomads' => const Color(0xFF7AD9C8),
+        'greenhouse' => const Color(0xFF8FB87A),
         _ => accent,
       };
 
@@ -67,7 +75,7 @@ class AppTheme {
         selectedLabelTextStyle: TextStyle(color: accent, fontSize: 12, fontWeight: FontWeight.w600),
         unselectedIconTheme: IconThemeData(color: muted),
         unselectedLabelTextStyle: TextStyle(color: textSecondary, fontSize: 12),
-        indicatorColor: Color(0x33F5983C),
+        indicatorColor: Color(0x33D9927A),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
@@ -88,7 +96,7 @@ class AppTheme {
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
           backgroundColor: accent,
-          foregroundColor: const Color(0xFF1A0F08),
+          foregroundColor: const Color(0xFF1A1210),
           elevation: 0,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),

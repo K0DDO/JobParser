@@ -16,6 +16,14 @@ DEFAULT_SOURCES = [
     (SourceName.HIRIFY, "Hirify", True, False, "ready"),
     (SourceName.TALANTO, "Talanto", True, False, "ready"),
     (SourceName.GETMATCH, "GetMatch", True, False, "ready"),
+    (SourceName.REMOTEOK, "Remote OK", True, False, "ready"),
+    (SourceName.REMOTIVE, "Remotive", True, False, "ready"),
+    (SourceName.HIMALAYAS, "Himalayas", True, False, "ready"),
+    (SourceName.JOBICY, "Jobicy", True, False, "ready"),
+    (SourceName.ARBEITNOW, "Arbeitnow", True, False, "ready"),
+    (SourceName.WEWORKREMOTELY, "We Work Remotely", True, False, "ready"),
+    (SourceName.WORKINGNOMADS, "Working Nomads", True, False, "ready"),
+    (SourceName.GREENHOUSE, "Company Careers", True, False, "ready"),
 ]
 
 
@@ -86,4 +94,15 @@ async def ensure_default_sources(session: AsyncSession) -> list[SourceConfig]:
 
 def compute_next_sync(settings_row: AppSettings, from_time: datetime | None = None) -> datetime:
     base = from_time or utc_now_naive()
-    return base + timedelta(minutes=settings_row.sync_interval_minutes)
+    minutes = max(1, int(settings_row.sync_interval_minutes or 60))
+    return base + timedelta(minutes=minutes)
+
+
+def sync_is_due(settings_row: AppSettings, now: datetime | None = None) -> bool:
+    """True when a scheduled sync should run (including catch-up after sleep/restart)."""
+    if settings_row.sync_in_progress:
+        return False
+    current = now or utc_now_naive()
+    if settings_row.next_sync_at is None:
+        return True
+    return settings_row.next_sync_at <= current

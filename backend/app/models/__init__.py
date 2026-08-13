@@ -48,7 +48,7 @@ class Vacancy(Base):
     salary_to: Mapped[int | None] = mapped_column(Integer, nullable=True)
     currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
 
-    city: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    city: Mapped[str | None] = mapped_column(Text, nullable=True)
     remote: Mapped[bool] = mapped_column(Boolean, default=False)
     work_format: Mapped[str] = mapped_column(String(32), default="unknown")
     employment_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
