@@ -281,7 +281,10 @@ def parse_iso_datetime(value: str | int | float | None) -> datetime | None:
         except (OSError, ValueError, OverflowError):
             return None
     try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            return dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
     except ValueError:
         return None
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +14,7 @@ from app.db.session import AsyncSessionLocal
 from app.models import SearchProfile, SourceConfig, Vacancy
 from app.parsers import get_source
 from app.parsers.base import ParserConfig
+from app.schemas import VacancyData
 from app.services.applications import add_event, create_or_get_application
 from app.services.automation import AutoApplyGuard, enqueue_apply, process_pending_queue
 from app.services.dedupe import upsert_vacancy
@@ -23,6 +25,44 @@ from app.services.settings_service import compute_next_sync, get_or_create_setti
 logger = logging.getLogger(__name__)
 
 STALE_SYNC_MINUTES = 8
+
+
+def sync_max_pages(lookback_days: int) -> int:
+    """Fetch deeper history when the lookback window is wider."""
+    if lookback_days <= 1:
+        return 5
+    if lookback_days <= 7:
+        return 10
+    if lookback_days <= 14:
+        return 15
+    return 20
+
+
+def within_lookback(
+    published_at: datetime | None,
+    lookback_days: int | None,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """True if vacancy is within lookback window (or date unknown / no limit)."""
+    if lookback_days is None or lookback_days <= 0:
+        return True
+    if published_at is None:
+        return True
+    cutoff = (now or utc_now_naive()) - timedelta(days=lookback_days)
+    return published_at >= cutoff
+
+
+def filter_by_lookback(
+    items: list[VacancyData],
+    lookback_days: int | None,
+    *,
+    now: datetime | None = None,
+) -> list[VacancyData]:
+    if lookback_days is None or lookback_days <= 0:
+        return items
+    stamp = now or utc_now_naive()
+    return [item for item in items if within_lookback(item.published_at, lookback_days, now=stamp)]
 
 
 async def clear_stale_sync_lock(session: AsyncSession) -> bool:
@@ -86,6 +126,14 @@ async def run_sync(*, triggered_by: str = "scheduler") -> dict:
             ).scalars().all()
 
             new_vacancies: list[Vacancy] = []
+            lookback_days = max(1, min(90, int(settings.sync_lookback_days or 7)))
+            max_pages = sync_max_pages(lookback_days)
+            await add_log(
+                session,
+                f"Sync lookback: last {lookback_days} day(s), max_pages={max_pages}",
+                category="sync",
+            )
+            await session.commit()
 
             for source_cfg in sources:
                 parser = get_source(source_cfg.name)
@@ -103,9 +151,10 @@ async def run_sync(*, triggered_by: str = "scheduler") -> dict:
 
                 config = ParserConfig(
                     query=query,
-                    max_pages=10,
+                    max_pages=max_pages,
                     per_page=50,
                     sources_settings=dict(source_cfg.settings or {}),
+                    lookback_days=lookback_days,
                 )
                 try:
                     vacancies_data = await parser.fetch_vacancies(config)
@@ -127,8 +176,11 @@ async def run_sync(*, triggered_by: str = "scheduler") -> dict:
                     await session.commit()
                     continue
 
+                vacancies_data = filter_by_lookback(vacancies_data, lookback_days)
+
                 found = 0
                 created_count = 0
+                updated_count = 0
                 for data in vacancies_data:
                     try:
                         async with session.begin_nested():
@@ -144,6 +196,7 @@ async def run_sync(*, triggered_by: str = "scheduler") -> dict:
                         stats["created"] += 1
                         new_vacancies.append(vacancy)
                     else:
+                        updated_count += 1
                         stats["updated"] += 1
 
                 source_cfg.last_sync_at = utc_now_naive()
@@ -152,7 +205,7 @@ async def run_sync(*, triggered_by: str = "scheduler") -> dict:
                 source_cfg.found_today = (source_cfg.found_today or 0) + created_count
                 await add_log(
                     session,
-                    f"{source_cfg.display_name}: {found} vacancies found ({created_count} new)",
+                    f"{source_cfg.display_name}: {found} vacancies ({created_count} new, {updated_count} updated)",
                     category="parser",
                 )
                 await session.commit()
@@ -217,7 +270,8 @@ async def run_sync(*, triggered_by: str = "scheduler") -> dict:
             settings.system_status = "ok"
             await add_log(
                 session,
-                f"Sync finished: fetched={stats['fetched']} created={stats['created']} "
+                f"Sync finished (lookback={lookback_days}d): fetched={stats['fetched']} "
+                f"created={stats['created']} updated={stats['updated']} "
                 f"matched={stats['matched']} queued={stats['queued']}",
                 level="success",
                 category="sync",
@@ -227,6 +281,13 @@ async def run_sync(*, triggered_by: str = "scheduler") -> dict:
                     session,
                     "Новые вакансии",
                     f"Найдено {stats['created']} новых вакансий",
+                )
+            elif stats["fetched"]:
+                await add_notification(
+                    session,
+                    "Синхронизация завершена",
+                    f"Обработано {stats['fetched']} вакансий за {lookback_days} дн. "
+                    f"(новых: {stats['created']}, уже в базе: {stats['updated']})",
                 )
             await session.commit()
 

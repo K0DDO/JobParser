@@ -150,6 +150,13 @@ def test_parse_iso_datetime_accepts_unix_ts():
     assert dt.year == 2023
 
 
+def test_parse_iso_datetime_converts_msk_to_utc_naive():
+    dt = parse_iso_datetime("2026-08-24T22:41:53.345+03:00")
+    assert dt is not None
+    assert dt.hour == 19
+    assert dt.minute == 41
+
+
 def test_to_monthly_amount_helpers():
     assert to_monthly_amount(50, "hourly") == 8800
     assert to_monthly_amount(400, "daily") == 8800

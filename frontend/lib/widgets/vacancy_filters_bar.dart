@@ -257,7 +257,7 @@ class _VacancyFiltersBarState extends State<VacancyFiltersBar> {
         _FilterSection.status => 'Статус',
         _FilterSection.application => 'Отклик',
         _FilterSection.employment => 'Занятость',
-        _FilterSection.age => 'Возраст',
+        _FilterSection.age => 'Период',
         _FilterSection.profile => 'Профиль',
         _FilterSection.sort => 'Сорт',
         _FilterSection.manual => 'Ещё',
@@ -567,11 +567,11 @@ class _VacancyFiltersBarState extends State<VacancyFiltersBar> {
         chips.add(_chip('Название', f.sort == 'title', () => _set(state, () => f.sort = 'title')));
       case _FilterSection.age:
         chips.add(_chip('любой', f.maxAgeHours == null, () => _set(state, () => f.maxAgeHours = null)));
-        chips.add(_chip('24ч', f.maxAgeHours == 24, () => _set(state, () => f.maxAgeHours = 24)));
-        chips.add(_chip('3д', f.maxAgeHours == 72, () => _set(state, () => f.maxAgeHours = 72)));
-        chips.add(_chip('7д', f.maxAgeHours == 168, () => _set(state, () => f.maxAgeHours = 168)));
-        chips.add(_chip('14д', f.maxAgeHours == 336, () => _set(state, () => f.maxAgeHours = 336)));
-        chips.add(_chip('30д', f.maxAgeHours == 720, () => _set(state, () => f.maxAgeHours = 720)));
+        chips.add(_chip('сутки', f.maxAgeHours == 24, () => _set(state, () => f.maxAgeHours = 24)));
+        chips.add(_chip('3 дня', f.maxAgeHours == 72, () => _set(state, () => f.maxAgeHours = 72)));
+        chips.add(_chip('неделя', f.maxAgeHours == 168, () => _set(state, () => f.maxAgeHours = 168)));
+        chips.add(_chip('2 недели', f.maxAgeHours == 336, () => _set(state, () => f.maxAgeHours = 336)));
+        chips.add(_chip('месяц', f.maxAgeHours == 720, () => _set(state, () => f.maxAgeHours = 720)));
       case _FilterSection.employment:
         chips.add(_chip('любая', f.employmentTypes.isEmpty, () => _set(state, () => f.employmentTypes.clear())));
         for (final e in const ['full', 'part', 'contract', 'intern']) {

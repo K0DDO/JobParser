@@ -252,6 +252,7 @@ class SettingsOut(_MskJsonMixin):
     model_config = ConfigDict(from_attributes=True)
 
     sync_interval_minutes: int
+    sync_lookback_days: int = 7
     timezone: str
     notifications_enabled: bool
     global_auto_apply: bool
@@ -267,6 +268,7 @@ class SettingsOut(_MskJsonMixin):
 
 class SettingsUpdate(BaseModel):
     sync_interval_minutes: int | None = None
+    sync_lookback_days: int | None = Field(default=None, ge=1, le=90)
     timezone: str | None = None
     notifications_enabled: bool | None = None
     dry_run: bool | None = None

@@ -189,6 +189,7 @@ class AppSettings(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     sync_interval_minutes: Mapped[int] = mapped_column(Integer, default=60)
+    sync_lookback_days: Mapped[int] = mapped_column(Integer, default=7)
     timezone: Mapped[str] = mapped_column(String(64), default="Europe/Moscow")
     notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 

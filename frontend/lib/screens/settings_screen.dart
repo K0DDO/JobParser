@@ -4,6 +4,14 @@ import 'package:provider/provider.dart';
 import '../core/app_state.dart';
 import '../theme/app_theme.dart';
 
+const _lookbackOptions = <(int days, String label)>[
+  (1, 'За сутки'),
+  (3, 'За 3 дня'),
+  (7, 'За неделю'),
+  (14, 'За 2 недели'),
+  (30, 'За месяц'),
+];
+
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
 
@@ -14,6 +22,7 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   final intervalCtrl = TextEditingController();
   final dailyCtrl = TextEditingController();
+  int _lookbackDays = 7;
   bool _seeded = false;
 
   @override
@@ -27,6 +36,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (_seeded || state.settings == null) return;
     intervalCtrl.text = '${state.settings!.syncIntervalMinutes}';
     dailyCtrl.text = '${state.settings!.globalDailyLimit}';
+    _lookbackDays = state.settings!.syncLookbackDays;
     _seeded = true;
   }
 
@@ -47,13 +57,52 @@ class _SettingsScreenState extends State<SettingsScreen> {
             decoration: const InputDecoration(labelText: 'Sync interval (minutes)'),
             keyboardType: TextInputType.number,
           ),
+          const SizedBox(height: 12),
+          Text('Период выгрузки при синке', style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 4),
+          Text(
+            'Берутся вакансии, опубликованные за выбранный промежуток (по умолчанию неделя).',
+            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+          ),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<int>(
+            value: _lookbackOptions.any((e) => e.$1 == _lookbackDays) ? _lookbackDays : 7,
+            decoration: const InputDecoration(labelText: 'Lookback'),
+            items: [
+              for (final opt in _lookbackOptions)
+                DropdownMenuItem(value: opt.$1, child: Text(opt.$2)),
+            ],
+            onChanged: (v) {
+              if (v == null) return;
+              setState(() => _lookbackDays = v);
+            },
+          ),
           const SizedBox(height: 8),
           Text('Timezone: ${s?.timezone ?? "Europe/Moscow"}', style: const TextStyle(color: AppTheme.textSecondary)),
           const SizedBox(height: 12),
           ElevatedButton(
-            onPressed: () => state.updateSettings({
-              'sync_interval_minutes': int.tryParse(intervalCtrl.text.trim()) ?? 60,
-            }),
+            onPressed: () async {
+              final prevLookback = state.settings?.syncLookbackDays ?? 7;
+              await state.updateSettings({
+                'sync_interval_minutes': int.tryParse(intervalCtrl.text.trim()) ?? 60,
+                'sync_lookback_days': _lookbackDays,
+              });
+              if (_lookbackDays != prevLookback) {
+                state.vacancyFilters.maxAgeHours = _lookbackDays * 24;
+                await state.applyVacancyFilters();
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        'Период синка: ${_lookbackOptions.firstWhere((e) => e.$1 == _lookbackDays).$2}. '
+                        'Запускаю синхронизацию…',
+                      ),
+                    ),
+                  );
+                }
+                await state.syncNow();
+              }
+            },
             child: const Text('Сохранить General'),
           ),
         ]),

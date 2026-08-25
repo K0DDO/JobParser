@@ -14,6 +14,8 @@ class ParserConfig:
     sources_settings: dict[str, Any] = field(default_factory=dict)
     max_pages: int = 5
     per_page: int = 50
+    # Only keep vacancies published within this many days (None / 0 = no limit).
+    lookback_days: int | None = None
 
 
 class VacancySource(ABC):

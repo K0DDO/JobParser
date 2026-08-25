@@ -11,7 +11,7 @@ from app.parsers import get_all_sources
 
 
 DEFAULT_SOURCES = [
-    (SourceName.HH, "HH", False, True, "error"),
+    (SourceName.HH, "HH", True, False, "ready"),
     (SourceName.HABR, "Habr Career", True, False, "ready"),
     (SourceName.HIRIFY, "Hirify", True, False, "ready"),
     (SourceName.TALANTO, "Talanto", True, False, "ready"),
@@ -62,18 +62,18 @@ async def ensure_default_sources(session: AsyncSession) -> list[SourceConfig]:
                 src.parsing_enabled = True
                 src.status = "ready"
                 src.last_error = None
+            if name == SourceName.HH and (
+                src.status in {"unavailable", "error"}
+                or (src.last_error and ("403" in src.last_error or "paused" in src.last_error.lower()))
+            ):
+                src.parsing_enabled = True
+                src.auto_apply_enabled = False
+                src.status = "ready"
+                src.last_error = None
             if name == SourceName.HABR and src.status == "unavailable":
                 src.parsing_enabled = True
                 src.status = "ready"
                 src.last_error = None
-                hh = existing.get(SourceName.HH)
-                if hh is not None:
-                    hh.parsing_enabled = False
-                    hh.status = "error"
-                    hh.last_error = (
-                        "HH parsing paused: application is not approved and API returns 403. "
-                        "Vacancies are collected from Habr Career. Enable HH later in Sources."
-                    )
             continue
         meta = sources_meta.get(name)
         src = SourceConfig(

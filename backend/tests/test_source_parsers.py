@@ -183,6 +183,47 @@ def test_jobicy_accepts_list_job_type():
     assert "Software Engineering" in data.skills
 
 
+def test_hh_rss_normalize_salary_and_company():
+    from app.parsers.hh import normalize_hh_rss_item
+
+    data = normalize_hh_rss_item(
+        {
+            "title": "Python Backend Developer (Middle / Middle+)",
+            "link": "https://hh.ru/vacancy/136569409",
+            "guid": "https://hh.ru/vacancy/136569409",
+            "description": (
+                "<p>Вакансия компании: НейроСфера</p> "
+                "<p>Создана: 24.08.2026</p> "
+                "<p>Регион: Москва</p> "
+                "<p>Предполагаемый уровень месячного дохода: от 160 000 до 210 000 ₽</p>"
+            ),
+            "pubDate": "2026-08-24T22:41:53.345+03:00",
+        }
+    )
+    assert data is not None
+    assert data.source == "hh"
+    assert data.source_vacancy_id == "136569409"
+    assert data.company == "НейроСфера"
+    assert data.city == "Москва"
+    assert data.salary_from == 160000
+    assert data.salary_to == 210000
+    assert data.currency == "RUB"
+    assert data.salary_period == "monthly"
+    assert data.url.endswith("/vacancy/136569409")
+
+
+def test_hh_search_period_buckets():
+    from app.parsers.hh import hh_search_period
+
+    assert hh_search_period(None) is None
+    assert hh_search_period(0) is None
+    assert hh_search_period(1) == 1
+    assert hh_search_period(2) == 3
+    assert hh_search_period(7) == 7
+    assert hh_search_period(14) == 30
+    assert hh_search_period(90) == 30
+
+
 def test_workingnomads_normalize_yearly_and_hourly():
     from app.parsers.workingnomads import normalize_workingnomads_item
     from app.services.normalize import normalize_vacancy

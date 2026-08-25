@@ -240,6 +240,7 @@ class SourceItem {
 class AppSettings {
   AppSettings({
     required this.syncIntervalMinutes,
+    required this.syncLookbackDays,
     required this.timezone,
     required this.globalAutoApply,
     required this.dryRun,
@@ -249,6 +250,7 @@ class AppSettings {
   });
 
   final int syncIntervalMinutes;
+  final int syncLookbackDays;
   final String timezone;
   final bool globalAutoApply;
   final bool dryRun;
@@ -258,6 +260,7 @@ class AppSettings {
 
   factory AppSettings.fromJson(Map<String, dynamic> j) => AppSettings(
         syncIntervalMinutes: j['sync_interval_minutes'] as int? ?? 60,
+        syncLookbackDays: j['sync_lookback_days'] as int? ?? 7,
         timezone: j['timezone'] as String? ?? 'Europe/Moscow',
         globalAutoApply: j['global_auto_apply'] as bool? ?? false,
         dryRun: j['dry_run'] as bool? ?? true,
