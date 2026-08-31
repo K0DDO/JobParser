@@ -97,6 +97,12 @@ def original_salary_fields(vacancy: Vacancy) -> tuple[int | None, int | None, st
                 currency = base.get("currency") or currency
         return salary_from, salary_to, currency, "monthly"
     if source in {"habr", "hh"}:
+        if source == "hh":
+            from app.parsers.hh import _hh_salary
+
+            low, high, cur, period = _hh_salary(raw)
+            if low is not None or high is not None:
+                return low, high, cur or fallback_cur, period
         salary = raw.get("salary") or {}
         if isinstance(salary, dict):
             return (

@@ -144,6 +144,23 @@ def test_rub_monthly_salary_stays():
     assert result.salary_to == 300000
 
 
+def test_kzt_monthly_salary_stays():
+    data = VacancyData(
+        source="hh",
+        source_vacancy_id="136794400",
+        url="https://spb.hh.ru/vacancy/136794400",
+        title="Python Developer",
+        salary_from=500_000,
+        salary_to=800_000,
+        currency="KZT",
+        salary_period="monthly",
+    )
+    result = normalize_vacancy(data)
+    assert result.salary_from == 500_000
+    assert result.salary_to == 800_000
+    assert result.salary_period == "monthly"
+
+
 def test_parse_iso_datetime_accepts_unix_ts():
     dt = parse_iso_datetime(1700000000)
     assert dt is not None

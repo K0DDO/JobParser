@@ -7,6 +7,9 @@ title JobParser
 set "WEB_PORT=7357"
 set "ROOT=%~dp0"
 set "FRONTEND=%ROOT%frontend"
+rem VPN often breaks localhost / pub.dev unless excluded from tunnel
+set "NO_PROXY=localhost,127.0.0.1,::1,.local"
+set "no_proxy=localhost,127.0.0.1,::1,.local"
 
 echo ========================================
 echo   JobParser — запуск
@@ -81,10 +84,14 @@ echo [4/4] Запускаю Flutter в Chrome...
 pushd "%FRONTEND%"
 call flutter pub get
 if errorlevel 1 (
-  popd
-  echo [X] flutter pub get не удался
-  pause
-  exit /b 1
+  echo [!] flutter pub get не удался — пробую offline (часто VPN режет pub.dev)
+  call flutter pub get --offline
+  if errorlevel 1 (
+    popd
+    echo [X] flutter pub get не удался. С VPN: добавь pub.dev в split-tunnel или выключи VPN на минуту.
+    pause
+    exit /b 1
+  )
 )
 
 flutter devices 2>nul | findstr /I /C:"chrome" >nul

@@ -224,6 +224,33 @@ def test_hh_search_period_buckets():
     assert hh_search_period(90) == 30
 
 
+def test_hh_api_normalize_kzt_monthly_not_divided():
+    from app.parsers.hh import normalize_hh_api_item
+    from app.services.normalize import normalize_vacancy
+
+    data = normalize_hh_api_item(
+        {
+            "id": "136794400",
+            "name": "Python Developer",
+            "alternate_url": "https://spb.hh.ru/vacancy/136794400",
+            "area": {"id": "2", "name": "Санкт-Петербург"},
+            "employer": {"id": "1", "name": "Example"},
+            "salary_range": {
+                "from": 500000,
+                "to": 800000,
+                "currency": "KZT",
+                "mode": {"id": "MONTH", "name": "За месяц"},
+            },
+        }
+    )
+    assert data is not None
+    assert data.currency == "KZT"
+    assert data.salary_period == "monthly"
+    normalized = normalize_vacancy(data)
+    assert normalized.salary_from == 500_000
+    assert normalized.salary_to == 800_000
+
+
 def test_hh_api_normalize_salary_remote_and_period():
     from app.parsers.hh import normalize_hh_api_item
 

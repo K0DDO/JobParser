@@ -109,7 +109,22 @@ _YEARLY_FLOOR = {
     "PLN": 80_000,
     "RUB": 900_000,
     "RUR": 900_000,
+    # CIS / regional currencies: high monthly figures are normal on HH.
+    "KZT": 15_000_000,
+    "BYN": 600_000,
+    "UAH": 3_600_000,
+    "UZS": 600_000_000,
+    "GEL": 600_000,
+    "AMD": 15_000_000,
+    "TRY": 1_200_000,
+    "CNY": 1_200_000,
 }
+
+# Only these currencies get "explicit monthly → yearly" magnitude correction
+# (e.g. Himalayas mislabels $150k/month). HH KZT/RUB monthly must stay monthly.
+_MAGNITUDE_MONTHLY_OVERRIDE_CURRENCIES = frozenset(
+    {"USD", "EUR", "GBP", "CAD", "AUD", "CHF", "SGD", "NZD", "PLN"}
+)
 
 
 def detect_hours_per_day(text: str | None) -> int:
@@ -188,8 +203,12 @@ def detect_salary_period(
     if period is None:
         return mag
     # Himalayas etc. sometimes label annual USD figures as monthly.
+    # HH and other boards often send real monthly KZT/RUB — do not divide those by 12.
     if period == "monthly" and mag == "yearly":
-        return "yearly"
+        cur = (currency or "").upper()
+        if cur in _MAGNITUDE_MONTHLY_OVERRIDE_CURRENCIES:
+            return "yearly"
+        return "monthly"
     if period == "hourly" and mag == "yearly":
         return "yearly"
     if period == "yearly" and mag == "hourly":
