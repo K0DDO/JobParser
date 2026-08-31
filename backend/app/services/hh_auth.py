@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 from urllib.parse import urlencode
 
@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.enums import SourceName
+from app.core.timeutil import utc_now_naive
 from app.models import SourceConfig
 
 AUTHORIZE_URL = "https://hh.ru/oauth/authorize"
@@ -53,22 +54,68 @@ def build_authorize_url() -> str:
     return f"{AUTHORIZE_URL}?{urlencode(params)}"
 
 
-async def exchange_code(code: str) -> dict[str, Any]:
-    if not settings.hh_client_id or not settings.hh_client_secret:
-        raise RuntimeError("HH_CLIENT_ID / HH_CLIENT_SECRET are not set in .env")
-
-    payload = {
-        "grant_type": "authorization_code",
-        "client_id": settings.hh_client_id,
-        "client_secret": settings.hh_client_secret,
-        "code": code,
-        "redirect_uri": settings.hh_redirect_uri,
-    }
+async def _post_token(payload: dict[str, str]) -> dict[str, Any]:
     async with httpx.AsyncClient(timeout=30.0, headers=hh_headers()) as client:
         response = await client.post(TOKEN_URL, data=payload)
         if response.status_code >= 400:
             raise RuntimeError(f"HH token exchange failed ({response.status_code}): {response.text[:500]}")
-        return response.json()
+        data = response.json()
+        if not data.get("access_token"):
+            raise RuntimeError("HH token exchange returned no access_token")
+        return data
+
+
+async def exchange_code(code: str) -> dict[str, Any]:
+    if not settings.hh_client_id or not settings.hh_client_secret:
+        raise RuntimeError("HH_CLIENT_ID / HH_CLIENT_SECRET are not set in .env")
+
+    return await _post_token(
+        {
+            "grant_type": "authorization_code",
+            "client_id": settings.hh_client_id,
+            "client_secret": settings.hh_client_secret,
+            "code": code,
+            "redirect_uri": settings.hh_redirect_uri,
+        }
+    )
+
+
+async def exchange_client_credentials() -> dict[str, Any]:
+    if not settings.hh_client_id or not settings.hh_client_secret:
+        raise RuntimeError("HH_CLIENT_ID / HH_CLIENT_SECRET are not set in .env")
+    return await _post_token(
+        {
+            "grant_type": "client_credentials",
+            "client_id": settings.hh_client_id,
+            "client_secret": settings.hh_client_secret,
+        }
+    )
+
+
+async def refresh_access_token(refresh_token: str) -> dict[str, Any]:
+    if not settings.hh_client_id or not settings.hh_client_secret:
+        raise RuntimeError("HH_CLIENT_ID / HH_CLIENT_SECRET are not set in .env")
+    return await _post_token(
+        {
+            "grant_type": "refresh_token",
+            "client_id": settings.hh_client_id,
+            "client_secret": settings.hh_client_secret,
+            "refresh_token": refresh_token,
+        }
+    )
+
+
+def _token_expired(stored: dict[str, Any], *, skew_seconds: int = 120) -> bool:
+    raw = stored.get("expires_at")
+    if not raw:
+        return False
+    try:
+        from datetime import datetime
+
+        exp = datetime.fromisoformat(str(raw))
+    except ValueError:
+        return False
+    return exp <= utc_now_naive() + timedelta(seconds=skew_seconds)
 
 
 async def save_tokens(session: AsyncSession, token_payload: dict[str, Any]) -> SourceConfig:
@@ -76,23 +123,52 @@ async def save_tokens(session: AsyncSession, token_payload: dict[str, Any]) -> S
     if source is None:
         raise RuntimeError("HH source is not initialized")
 
+    now = utc_now_naive()
     expires_in = int(token_payload.get("expires_in") or 0)
-    expires_at = (datetime.utcnow() + timedelta(seconds=expires_in)).isoformat() if expires_in else None
+    expires_at = (now + timedelta(seconds=expires_in)).isoformat() if expires_in else None
     current = dict(source.settings or {})
-    current.update(
-        {
-            "access_token": token_payload.get("access_token"),
-            "refresh_token": token_payload.get("refresh_token"),
-            "token_type": token_payload.get("token_type"),
-            "expires_at": expires_at,
-            "connected_at": datetime.utcnow().isoformat(),
-        }
-    )
+    current["access_token"] = token_payload.get("access_token")
+    if token_payload.get("refresh_token"):
+        current["refresh_token"] = token_payload.get("refresh_token")
+    if token_payload.get("token_type"):
+        current["token_type"] = token_payload.get("token_type")
+    current["expires_at"] = expires_at
+    current["connected_at"] = now.isoformat()
     source.settings = current
     source.last_error = None
     source.status = "ready"
     await session.flush()
     return source
+
+
+async def ensure_hh_token(session: AsyncSession) -> str:
+    """Return a usable HH access token: stored → refresh → client_credentials → env."""
+    source = await get_hh_source(session)
+    stored = dict(source.settings or {}) if source else {}
+    token = str(stored.get("access_token") or settings.hh_access_token or "")
+    refresh = str(stored.get("refresh_token") or "")
+
+    if token and refresh and _token_expired(stored):
+        try:
+            payload = await refresh_access_token(refresh)
+            if source is not None:
+                await save_tokens(session, payload)
+            token = str(payload.get("access_token") or token)
+        except Exception:  # noqa: BLE001
+            token = token if not _token_expired(stored, skew_seconds=0) else ""
+
+    if token:
+        return token
+
+    if settings.hh_client_id and settings.hh_client_secret:
+        try:
+            payload = await exchange_client_credentials()
+            if source is not None:
+                await save_tokens(session, payload)
+            return str(payload.get("access_token") or "")
+        except Exception:  # noqa: BLE001
+            return ""
+    return ""
 
 
 async def probe_hh(access_token: str | None = None) -> dict[str, Any]:

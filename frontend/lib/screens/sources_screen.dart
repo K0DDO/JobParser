@@ -27,7 +27,8 @@ class SourcesScreen extends StatelessWidget {
         const SizedBox(height: 8),
         const Text(
           'Импорт вакансий идёт с публичных API. Аккаунты на Habr / Hirify / Talanto / GetMatch для сбора не нужны. '
-          'HH — только официальный OAuth после одобрения приложения. Регистрироваться и логиниться за тебя приложение не будет.',
+          'HH — официальный search API (приложение одобрено). Автооткликов на HH нет. '
+          'Если токена ещё нет — нажми «Подключить HH» (OAuth в браузере).',
           style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
         ),
         const SizedBox(height: 16),
@@ -81,7 +82,7 @@ class SourcesScreen extends StatelessWidget {
                 if (s.name == 'hh') ...[
                   const SizedBox(height: 8),
                   Text(
-                    s.connected ? 'HH OAuth: подключён' : 'HH OAuth: не подключён (заявка ещё на модерации)',
+                    s.connected ? 'HH API: токен есть' : 'HH API: нет токена — нажми «Подключить HH»',
                     style: TextStyle(color: s.connected ? AppTheme.success : AppTheme.warning),
                   ),
                   const SizedBox(height: 8),

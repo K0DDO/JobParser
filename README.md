@@ -25,4 +25,4 @@ API: http://localhost:8000/docs
 - [We Work Remotely](https://weworkremotely.com)
 - [Working Nomads](https://www.workingnomads.com/jobs)
 - Company careers (Greenhouse / Lever / Ashby): GitLab, JetBrains, Canonical, Stripe, Datadog и др.
-- [hh.ru](https://hh.ru) — выгрузка через публичный search RSS (без автооткликов)
+- [hh.ru](https://hh.ru) — официальный search API (без автооткликов; RSS как запасной канал)

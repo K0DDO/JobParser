@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.enums import ApplicationStatus, VacancyStatus
+from app.core.enums import ApplicationStatus, SourceName, VacancyStatus
 from app.core.timeutil import is_stale, utc_now_naive
 from app.db.session import AsyncSessionLocal
 from app.models import SearchProfile, SourceConfig, Vacancy
@@ -19,6 +19,7 @@ from app.services.applications import add_event, create_or_get_application
 from app.services.automation import AutoApplyGuard, enqueue_apply, process_pending_queue
 from app.services.dedupe import upsert_vacancy
 from app.services.filters import vacancy_matches_profile
+from app.services.hh_auth import ensure_hh_token
 from app.services.logging_service import add_log, add_notification
 from app.services.settings_service import compute_next_sync, get_or_create_settings
 
@@ -149,11 +150,26 @@ async def run_sync(*, triggered_by: str = "scheduler") -> dict:
                     query_parts.extend((p.include_skills or [])[:3])
                 query = " OR ".join(dict.fromkeys(query_parts)) if query_parts else None
 
+                source_settings = dict(source_cfg.settings or {})
+                if source_cfg.name == SourceName.HH:
+                    hh_token = await ensure_hh_token(session)
+                    if hh_token:
+                        source_settings["access_token"] = hh_token
+                        await session.commit()
+                    else:
+                        await add_log(
+                            session,
+                            "HH: нет access token — будет попытка API без Bearer, затем RSS",
+                            level="warning",
+                            category="parser",
+                        )
+                        await session.commit()
+
                 config = ParserConfig(
                     query=query,
                     max_pages=max_pages,
                     per_page=50,
-                    sources_settings=dict(source_cfg.settings or {}),
+                    sources_settings=source_settings,
                     lookback_days=lookback_days,
                 )
                 try:

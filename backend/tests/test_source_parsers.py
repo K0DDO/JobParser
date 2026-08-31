@@ -224,6 +224,50 @@ def test_hh_search_period_buckets():
     assert hh_search_period(90) == 30
 
 
+def test_hh_api_normalize_salary_remote_and_period():
+    from app.parsers.hh import normalize_hh_api_item
+
+    data = normalize_hh_api_item(
+        {
+            "id": "136569409",
+            "name": "Python Backend Developer",
+            "alternate_url": "https://hh.ru/vacancy/136569409",
+            "published_at": "2026-08-24T22:41:53+0300",
+            "area": {"id": "1", "name": "Москва"},
+            "employer": {"id": "1", "name": "НейроСфера"},
+            "salary_range": {
+                "from": 160000,
+                "to": 210000,
+                "currency": "RUR",
+                "mode": {"id": "MONTH", "name": "За месяц"},
+            },
+            "experience": {"id": "between1And3", "name": "От 1 года до 3 лет"},
+            "schedule": {"id": "remote", "name": "Удаленная работа"},
+            "work_format": [{"id": "REMOTE", "name": "Удалённо"}],
+            "employment": {"id": "full", "name": "Полная занятость"},
+            "snippet": {
+                "requirement": "Python, FastAPI",
+                "responsibility": "Писать сервисы",
+            },
+        }
+    )
+    assert data is not None
+    assert data.source == "hh"
+    assert data.source_vacancy_id == "136569409"
+    assert data.company == "НейроСфера"
+    assert data.city == "Москва"
+    assert data.salary_from == 160000
+    assert data.salary_to == 210000
+    assert data.currency == "RUB"
+    assert data.salary_period == "monthly"
+    assert data.remote is True
+    assert data.work_format == "remote"
+    assert data.experience == "between_1_and_3"
+    assert data.employment_type == "Полная занятость"
+    assert data.published_at is not None
+    assert data.source_metadata == {"via": "api"}
+
+
 def test_workingnomads_normalize_yearly_and_hourly():
     from app.parsers.workingnomads import normalize_workingnomads_item
     from app.services.normalize import normalize_vacancy

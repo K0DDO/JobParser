@@ -42,6 +42,7 @@ from app.services.automation import emergency_stop
 from app.services.currency import fx_status, refresh_rates
 from app.services.hh_auth import (
     build_authorize_url,
+    ensure_hh_token,
     exchange_code,
     get_hh_source,
     probe_hh,
@@ -479,15 +480,16 @@ async def stop_automation(db: AsyncSession = Depends(get_db)) -> SettingsOut:
 
 @router.get("/auth/hh/status")
 async def hh_auth_status(db: AsyncSession = Depends(get_db)) -> dict:
+    token = await ensure_hh_token(db)
+    await db.commit()
     source = await get_hh_source(db)
-    token = resolve_access_token(source)
     probe = await probe_hh(token or None)
     return {
         "client_id_set": bool(env_settings.hh_client_id),
         "client_secret_set": bool(env_settings.hh_client_secret),
         "user_agent": env_settings.hh_user_agent,
         "redirect_uri": env_settings.hh_redirect_uri,
-        "connected": bool(token),
+        "connected": bool(token or resolve_access_token(source)),
         "probe": probe,
     }
 
