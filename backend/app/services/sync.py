@@ -22,6 +22,7 @@ from app.services.filters import vacancy_matches_profile
 from app.services.hh_auth import ensure_hh_token
 from app.services.logging_service import add_log, add_notification
 from app.services.settings_service import compute_next_sync, get_or_create_settings
+from app.services.telegram import notify_new_matched_vacancies, telegram_configured
 
 logger = logging.getLogger(__name__)
 
@@ -238,6 +239,9 @@ async def run_sync(*, triggered_by: str = "scheduler") -> dict:
                 s.name: s
                 for s in (await session.execute(select(SourceConfig))).scalars().all()
             }
+            new_ids = {v.id for v in new_vacancies if v.id is not None}
+            telegram_queue: list[tuple[Vacancy, str | None]] = []
+            telegram_queued_ids: set[int] = set()
 
             for vacancy in all_recent:
                 matched_any = False
@@ -263,6 +267,14 @@ async def run_sync(*, triggered_by: str = "scheduler") -> dict:
                             new_status=ApplicationStatus.MATCHED,
                         )
 
+                    if (
+                        vacancy.id in new_ids
+                        and vacancy.id not in telegram_queued_ids
+                        and vacancy.telegram_notified_at is None
+                    ):
+                        telegram_queue.append((vacancy, profile.name))
+                        telegram_queued_ids.add(vacancy.id)
+
                     source_cfg = source_map.get(vacancy.source)
                     if source_cfg is None:
                         continue
@@ -281,6 +293,22 @@ async def run_sync(*, triggered_by: str = "scheduler") -> dict:
                 if matched_any:
                     await session.flush()
 
+            tg_sent = 0
+            if (
+                settings.notifications_enabled
+                and telegram_configured()
+                and telegram_queue
+            ):
+                tg_sent = await notify_new_matched_vacancies(session, telegram_queue)
+                stats["telegram_sent"] = tg_sent
+                if tg_sent:
+                    await add_log(
+                        session,
+                        f"Telegram: sent {tg_sent} vacancy card(s)",
+                        level="success",
+                        category="telegram",
+                    )
+
             settings.last_sync_at = utc_now_naive()
             settings.next_sync_at = compute_next_sync(settings)
             settings.system_status = "ok"
@@ -288,7 +316,8 @@ async def run_sync(*, triggered_by: str = "scheduler") -> dict:
                 session,
                 f"Sync finished (lookback={lookback_days}d): fetched={stats['fetched']} "
                 f"created={stats['created']} updated={stats['updated']} "
-                f"matched={stats['matched']} queued={stats['queued']}",
+                f"matched={stats['matched']} queued={stats['queued']}"
+                + (f" telegram={tg_sent}" if tg_sent else ""),
                 level="success",
                 category="sync",
             )

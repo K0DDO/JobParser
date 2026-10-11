@@ -63,6 +63,7 @@ class Vacancy(Base):
     source_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     status: Mapped[str] = mapped_column(String(32), default="new", index=True)
+    telegram_notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

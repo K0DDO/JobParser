@@ -1,0 +1,1 @@
+Company logos copied from frontend/assets/logos for Telegram banner rendering.

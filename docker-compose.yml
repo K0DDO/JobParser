@@ -47,6 +47,9 @@ services:
       HH_CLIENT_ID: ${HH_CLIENT_ID:-}
       HH_CLIENT_SECRET: ${HH_CLIENT_SECRET:-}
       HH_REDIRECT_URI: ${HH_REDIRECT_URI:-http://localhost:8000/api/v1/auth/hh/callback}
+      TELEGRAM_ENABLED: ${TELEGRAM_ENABLED:-true}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     ports:
       - "8000:8000"
     volumes:

@@ -23,5 +23,9 @@ class Settings(BaseSettings):
     talanto_api_key: str = ""
     getmatch_session_cookie: str = ""
 
+    telegram_enabled: bool = True
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+
 
 settings = Settings()

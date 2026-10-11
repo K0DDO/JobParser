@@ -11,6 +11,8 @@ cd frontend && flutter run -d windows
 
 API: http://localhost:8000/docs
 
+Сервер / Telegram-карточки / GitHub Actions: см. [DEPLOY.md](DEPLOY.md).
+
 ## Платформы
 
 - [Habr Career](https://career.habr.com)
