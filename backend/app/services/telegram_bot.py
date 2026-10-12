@@ -28,6 +28,7 @@ from app.services.telegram_filters import (
     TELEGRAM_ROLES,
     TELEGRAM_SALARY_FROM,
     TELEGRAM_SALARY_TO,
+    TELEGRAM_SYNC_LOOKBACK,
     TELEGRAM_WORK_FORMATS,
     empty_filters,
     format_filters_summary,
@@ -98,9 +99,18 @@ def _nav_footer(*extra: list[dict[str, str]]) -> list[list[dict[str, str]]]:
     return rows
 
 
-def _main_keyboard(filters: dict[str, Any]) -> dict[str, Any]:
+def _main_keyboard(
+    filters: dict[str, Any],
+    *,
+    lookback_days: int = 7,
+) -> dict[str, Any]:
     roles_n = len(filters["roles"])
+    lookback_label = next(
+        (label for days, label in TELEGRAM_SYNC_LOOKBACK if days == lookback_days),
+        f"{lookback_days} дн.",
+    )
     rows = [
+        [_btn(f"🔄 Синк · {lookback_label}", "m:sync")],
         [_btn(f"1️⃣ Область ({roles_n})", "m:roles")],
         [
             _btn(
@@ -126,13 +136,28 @@ def _main_keyboard(filters: dict[str, Any]) -> dict[str, Any]:
         ],
         [
             _btn(f"Занятость ({len(filters['employment_types'])})", "m:empl"),
-            _btn("Период", "m:age"),
+            _btn("Свежесть", "m:age"),
         ],
         [
             _btn("🧹 Сбросить всё", "c:all"),
             _btn("🧪 Тестовая вакансия", "cmd:test"),
         ],
     ]
+    return {"inline_keyboard": rows}
+
+
+def _sync_keyboard(*, lookback_days: int = 7) -> dict[str, Any]:
+    buttons = [
+        _btn(_mark(lookback_days == days, label), f"sync:{days}")
+        for days, label in TELEGRAM_SYNC_LOOKBACK
+    ]
+    rows = _rows_of(buttons, 1)
+    rows.append(
+        [
+            _btn("▶️ Синк с текущим периодом", f"sync:{lookback_days}"),
+        ]
+    )
+    rows.extend(_nav_footer())
     return {"inline_keyboard": rows}
 
 
@@ -306,9 +331,17 @@ def _age_keyboard(filters: dict[str, Any]) -> dict[str, Any]:
     return {"inline_keyboard": rows}
 
 
-def _keyboard_for(menu: str, filters: dict[str, Any]) -> dict[str, Any]:
+def _keyboard_for(
+    menu: str,
+    filters: dict[str, Any],
+    *,
+    lookback_days: int = 7,
+) -> dict[str, Any]:
+    if menu == "sync":
+        return _sync_keyboard(lookback_days=lookback_days)
+    if menu == "main":
+        return _main_keyboard(filters, lookback_days=lookback_days)
     return {
-        "main": _main_keyboard,
         "roles": _roles_keyboard,
         "langs": _langs_keyboard,
         "fw": _fw_keyboard,
@@ -320,7 +353,7 @@ def _keyboard_for(menu: str, filters: dict[str, Any]) -> dict[str, Any]:
         "city": _city_keyboard,
         "empl": _empl_keyboard,
         "age": _age_keyboard,
-    }.get(menu, _main_keyboard)(filters)
+    }.get(menu, lambda f: _main_keyboard(f, lookback_days=lookback_days))(filters)
 
 
 async def _api(
@@ -377,13 +410,62 @@ async def _show_menu(
     filters: dict[str, Any],
     menu: str = "main",
     message_id: int | None = None,
+    *,
+    lookback_days: int = 7,
 ) -> None:
+    text = format_filters_summary(filters, lookback_days=lookback_days)
+    if menu == "sync":
+        text = (
+            f"{text}\n\n"
+            "<b>🔄 Синхронизация</b>\n"
+            "Выбери период — подгружу вакансии с площадок за это время "
+            "и выставлю тот же период для свежести карточек."
+        )
     await _edit_or_send(
         chat_id,
-        format_filters_summary(filters),
-        _keyboard_for(menu, filters),
+        text,
+        _keyboard_for(menu, filters, lookback_days=lookback_days),
         message_id=message_id,
     )
+
+
+async def _run_sync_and_report(chat_id: str, days: int) -> None:
+    from app.scheduler.jobs import trigger_manual_sync
+
+    label = next(
+        (name for d, name in TELEGRAM_SYNC_LOOKBACK if d == days),
+        f"{days} дн.",
+    )
+    try:
+        await send_message(
+            f"🔄 Синк <b>{label}</b> запущен…\n"
+            "Это может занять пару минут."
+        )
+        result = await trigger_manual_sync(triggered_by="telegram")
+        if result.get("status") == "busy":
+            await send_message("⏳ Синк уже идёт — дождись окончания и нажми снова.")
+            return
+        if result.get("status") == "error":
+            err = "; ".join(result.get("errors") or ["unknown"])
+            await send_message(f"❌ Синк упал: <code>{err[:500]}</code>")
+            return
+        tg_sent = result.get("telegram_sent") or 0
+        await send_message(
+            f"✅ Синк готов · <b>{label}</b>\n"
+            f"fetched={result.get('fetched', 0)} · "
+            f"новых={result.get('created', 0)} · "
+            f"обновлено={result.get('updated', 0)} · "
+            f"matched={result.get('matched', 0)}"
+            + (f" · telegram={tg_sent}" if tg_sent else "")
+            + "\n\n"
+            "<i>created=0 часто нормально: вакансии уже были в базе.</i>"
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Telegram sync failed")
+        try:
+            await send_message(f"❌ Синк ошибка: <code>{str(exc)[:500]}</code>")
+        except Exception:  # noqa: BLE001
+            pass
 
 
 async def _send_test_card(chat_id: str) -> None:
@@ -467,6 +549,13 @@ def _menu_after_clear(what: str) -> str:
     }.get(what, "main")
 
 
+def _lookback_from_settings(app_settings: Any) -> int:
+    try:
+        return max(1, min(90, int(getattr(app_settings, "sync_lookback_days", None) or 7)))
+    except (TypeError, ValueError):
+        return 7
+
+
 async def _handle_callback(callback: dict[str, Any]) -> None:
     data = str(callback.get("data") or "")
     message = callback.get("message") or {}
@@ -484,18 +573,53 @@ async def _handle_callback(callback: dict[str, Any]) -> None:
     async with AsyncSessionLocal() as session:
         app_settings = await get_or_create_settings(session)
         filters = load_filters_from_settings(app_settings)
+        lookback_days = _lookback_from_settings(app_settings)
         menu = "main"
         toast = ""
 
         if data.startswith("m:"):
             menu = data.split(":", 1)[1] or "main"
             await _answer_callback(callback_id)
-            await _show_menu(chat_id, filters, menu, message_id=message_id)
+            await _show_menu(
+                chat_id,
+                filters,
+                menu,
+                message_id=message_id,
+                lookback_days=lookback_days,
+            )
             return
 
         if data == "cmd:test":
             await _answer_callback(callback_id, "Шлю тест…")
             await _send_test_card(chat_id)
+            return
+
+        if data.startswith("sync:"):
+            try:
+                days = int(data.split(":", 1)[1])
+            except ValueError:
+                await _answer_callback(callback_id, "bad period")
+                return
+            allowed = {d for d, _ in TELEGRAM_SYNC_LOOKBACK}
+            if days not in allowed:
+                await _answer_callback(callback_id, "bad period")
+                return
+            app_settings.sync_lookback_days = days
+            filters["max_age_hours"] = days * 24
+            save_filters_to_settings(app_settings, filters)
+            await session.commit()
+            await _answer_callback(callback_id, f"Синк {days}д")
+            await _show_menu(
+                chat_id,
+                filters,
+                "sync",
+                message_id=message_id,
+                lookback_days=days,
+            )
+            asyncio.create_task(
+                _run_sync_and_report(chat_id, days),
+                name=f"telegram-sync-{days}",
+            )
             return
 
         if data.startswith("c:"):
@@ -504,7 +628,13 @@ async def _handle_callback(callback: dict[str, Any]) -> None:
             save_filters_to_settings(app_settings, filters)
             await session.commit()
             await _answer_callback(callback_id, "Сброшено")
-            await _show_menu(chat_id, filters, _menu_after_clear(what), message_id=message_id)
+            await _show_menu(
+                chat_id,
+                filters,
+                _menu_after_clear(what),
+                message_id=message_id,
+                lookback_days=lookback_days,
+            )
             return
 
         changed = True
@@ -585,7 +715,7 @@ async def _handle_callback(callback: dict[str, Any]) -> None:
                 filters["max_age_hours"] = None
             else:
                 filters["max_age_hours"] = hours
-            toast, menu = "период", "age"
+            toast, menu = "свежесть", "age"
         else:
             await _answer_callback(callback_id)
             return
@@ -597,7 +727,13 @@ async def _handle_callback(callback: dict[str, Any]) -> None:
         save_filters_to_settings(app_settings, filters)
         await session.commit()
         await _answer_callback(callback_id, toast)
-        await _show_menu(chat_id, filters, menu, message_id=message_id)
+        await _show_menu(
+            chat_id,
+            filters,
+            menu,
+            message_id=message_id,
+            lookback_days=lookback_days,
+        )
 
 
 async def _handle_message(message: dict[str, Any]) -> None:
@@ -611,20 +747,27 @@ async def _handle_message(message: dict[str, Any]) -> None:
     async with AsyncSessionLocal() as session:
         app_settings = await get_or_create_settings(session)
         filters = load_filters_from_settings(app_settings)
+        lookback_days = _lookback_from_settings(app_settings)
 
         if cmd in {"/start", "/filters", "/menu"}:
-            await _show_menu(chat_id, filters, "main")
+            await _show_menu(chat_id, filters, "main", lookback_days=lookback_days)
+            return
+
+        if cmd == "/sync":
+            await _show_menu(chat_id, filters, "sync", lookback_days=lookback_days)
             return
 
         if cmd == "/status":
-            await send_message(format_filters_summary(filters))
+            await send_message(
+                format_filters_summary(filters, lookback_days=lookback_days)
+            )
             return
 
         if cmd == "/reset":
             filters = empty_filters()
             save_filters_to_settings(app_settings, filters)
             await session.commit()
-            await _show_menu(chat_id, filters, "main")
+            await _show_menu(chat_id, filters, "main", lookback_days=lookback_days)
             return
 
         if cmd == "/test":
@@ -635,6 +778,7 @@ async def _handle_message(message: dict[str, Any]) -> None:
             await send_message(
                 "Команды:\n"
                 "/filters — мастер фильтров\n"
+                "/sync — выгрузка за период\n"
                 "/status — текущий выбор\n"
                 "/test — тестовая карточка\n"
                 "/reset — сбросить всё"
@@ -714,5 +858,11 @@ async def send_filters_menu() -> bool:
     async with AsyncSessionLocal() as session:
         app_settings = await get_or_create_settings(session)
         filters = load_filters_from_settings(app_settings)
-        await _show_menu(str(settings.telegram_chat_id).strip(), filters, "main")
+        lookback_days = _lookback_from_settings(app_settings)
+        await _show_menu(
+            str(settings.telegram_chat_id).strip(),
+            filters,
+            "main",
+            lookback_days=lookback_days,
+        )
     return True

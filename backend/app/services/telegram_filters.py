@@ -115,6 +115,15 @@ TELEGRAM_AGE_HOURS: list[tuple[int, str]] = [
     (720, "месяц"),
 ]
 
+# Период выгрузки при синке (как в настройках Flutter)
+TELEGRAM_SYNC_LOOKBACK: list[tuple[int, str]] = [
+    (1, "За сутки"),
+    (3, "За 3 дня"),
+    (7, "За неделю"),
+    (14, "За 2 недели"),
+    (30, "За месяц"),
+]
+
 TELEGRAM_SALARY_FROM: list[int] = [100_000, 150_000, 200_000, 250_000, 300_000, 400_000, 500_000]
 TELEGRAM_SALARY_TO: list[int] = [150_000, 200_000, 250_000, 300_000, 400_000, 500_000, 700_000]
 
@@ -261,7 +270,11 @@ def _label_map(pairs: list[tuple[str, str]]) -> dict[str, str]:
     return {k: v for k, v in pairs}
 
 
-def format_filters_summary(filters: dict[str, Any]) -> str:
+def format_filters_summary(
+    filters: dict[str, Any],
+    *,
+    lookback_days: int | None = None,
+) -> str:
     f = normalize_filters(filters)
     role_labels = _label_map(TELEGRAM_ROLES)
     fmt_labels = _label_map(TELEGRAM_WORK_FORMATS)
@@ -296,6 +309,13 @@ def format_filters_summary(filters: dict[str, Any]) -> str:
     age = f["max_age_hours"]
     age_line = age_labels.get(age, f"{age}ч") if age else "любой"
 
+    lookback_labels = {d: label for d, label in TELEGRAM_SYNC_LOOKBACK}
+    lookback_line = (
+        lookback_labels.get(int(lookback_days), f"{lookback_days} дн.")
+        if lookback_days
+        else "—"
+    )
+
     status = "рассылка вкл" if filters_ready(f) else "выбери область — иначе рассылка выкл"
 
     return (
@@ -310,9 +330,11 @@ def format_filters_summary(filters: dict[str, Any]) -> str:
         f"Компании: <b>{join_or(f['companies'], company_labels, 'все')}</b>\n"
         f"Города: <b>{join_or(f['cities'], empty='все')}</b>\n"
         f"Занятость: <b>{join_or(f['employment_types'], empl_labels, 'любая')}</b>\n"
-        f"Период: <b>{age_line}</b>\n\n"
-        "Сначала область → потом стек → остальное по желанию.\n"
-        "/filters · /test · /status · /reset"
+        f"Свежесть карточек: <b>{age_line}</b>\n"
+        f"Выгрузка (синк): <b>{lookback_line}</b>\n\n"
+        "Сначала область → стек → остальное. "
+        "Синк подгружает вакансии за выбранный период.\n"
+        "/filters · /sync · /test · /status · /reset"
     )
 
 
