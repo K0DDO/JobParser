@@ -28,15 +28,36 @@ def telegram_configured() -> bool:
     )
 
 
+async def _telegram_post(method: str, data: dict[str, Any], files: dict | None = None) -> dict[str, Any]:
+    if not telegram_configured():
+        raise RuntimeError("Telegram is not configured")
+    url = f"{TELEGRAM_API}/bot{settings.telegram_bot_token}/{method}"
+    async with httpx.AsyncClient(timeout=45.0) as client:
+        response = await client.post(url, data=data, files=files)
+        body = response.json() if response.content else {}
+        if response.status_code >= 400 or not body.get("ok"):
+            detail = body.get("description") or response.text[:400]
+            raise RuntimeError(f"Telegram {method} failed: {detail}")
+        return body
+
+
+async def send_message(text: str, *, parse_mode: str = "HTML") -> dict[str, Any]:
+    data = {
+        "chat_id": str(settings.telegram_chat_id).strip(),
+        "text": text[:4096],
+        "disable_web_page_preview": "true",
+    }
+    if parse_mode:
+        data["parse_mode"] = parse_mode
+    return await _telegram_post("sendMessage", data)
+
+
 async def send_photo_bytes(
     *,
     photo: bytes,
     caption: str,
     filename: str = "vacancy.png",
 ) -> dict[str, Any]:
-    if not telegram_configured():
-        raise RuntimeError("Telegram is not configured")
-    url = f"{TELEGRAM_API}/bot{settings.telegram_bot_token}/sendPhoto"
     data = {
         "chat_id": str(settings.telegram_chat_id).strip(),
         "caption": caption[:1024],
@@ -44,13 +65,24 @@ async def send_photo_bytes(
         "disable_web_page_preview": "true",
     }
     files = {"photo": (filename, photo, "image/png")}
-    async with httpx.AsyncClient(timeout=45.0) as client:
-        response = await client.post(url, data=data, files=files)
-        body = response.json() if response.content else {}
-        if response.status_code >= 400 or not body.get("ok"):
-            detail = body.get("description") or response.text[:400]
-            raise RuntimeError(f"Telegram sendPhoto failed: {detail}")
-        return body
+    return await _telegram_post("sendPhoto", data, files=files)
+
+
+async def notify_startup() -> bool:
+    """Ping the chat when backend boots so Telegram wiring is visible."""
+    if not telegram_configured():
+        return False
+    text = (
+        "<b>JobParser запущен</b>\n"
+        "Синк по расписанию активен.\n"
+        "Новые вакансии по профилю буду присылать карточками сюда."
+    )
+    try:
+        await send_message(text)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Telegram startup notify failed: %s", exc)
+        return False
 
 
 async def send_vacancy_card(
