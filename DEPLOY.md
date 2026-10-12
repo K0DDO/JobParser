@@ -67,11 +67,21 @@ cd /opt/jobparser
 git remote -v
 ```
 
-После настройки каждый push в `main` делает `git reset --hard origin/main` и `docker compose up -d --build`.
+После настройки каждый push в `main` делает `git reset --hard origin/main` и
+`docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build`.
 
-Если на сервере используешь prod-override, поправь команду в workflow на:
+Перед `git reset` workflow останавливает backend и чистит root-owned `__pycache__`
+(они появляются, если раньше монтировали `./backend:/app`). В prod bind-mount отключён
+(`volumes: !reset []` в `docker-compose.prod.yml`) — код берётся из образа.
+
+Если деплой один раз упал на Permission denied — на VPS вручную:
 
 ```bash
+cd /opt/jobparser   # или твой VPS_DEPLOY_PATH
+docker compose stop backend || true
+sudo find . -type d -name '__pycache__' -prune -exec rm -rf {} +
+sudo chown -R "$USER":"$USER" .
+git reset --hard origin/main
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 

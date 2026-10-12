@@ -28,15 +28,30 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_DEPLOY_PATH: ${{ secrets.VPS_DEPLOY_PATH }}
         run: |
-          ssh -o StrictHostKeyChecking=yes "${VPS_USER}@${VPS_HOST}" << EOF
-            set -euo pipefail
-            cd "${VPS_DEPLOY_PATH}"
-            git fetch origin main
-            git reset --hard origin/main
-            if [ -f docker-compose.prod.yml ]; then
-              docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
-            else
-              docker compose up -d --build
-            fi
+          ssh -T -o StrictHostKeyChecking=yes "${VPS_USER}@${VPS_HOST}" \
+            "export DEPLOY_PATH=$(printf %q "${VPS_DEPLOY_PATH}"); bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+          echo "== deploy $(pwd) =="
+
+          # Bind-mount pycache is owned by root inside the container — free it first.
+          if [ -f docker-compose.prod.yml ]; then
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml stop backend || true
+          else
+            docker compose stop backend || true
+          fi
+          sudo find . -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true
+          sudo find . -type f -name '*.pyc' -delete 2>/dev/null || true
+          sudo chown -R "$(whoami):$(whoami)" . || true
+
+          git fetch origin main
+          git reset --hard origin/main
+
+          if [ -f docker-compose.prod.yml ]; then
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml ps
+          else
+            docker compose up -d --build
             docker compose ps
-          EOF
+          fi
+          REMOTE

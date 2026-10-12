@@ -1,4 +1,4 @@
-# Production overrides: DB/Redis only on localhost.
+# Production overrides: localhost ports, no source bind-mount (code from image).
 # Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 
 services:
@@ -13,6 +13,8 @@ services:
   backend:
     ports:
       - "127.0.0.1:8000:8000"
+    # Drop ./backend:/app from base compose so host isn't filled with root-owned __pycache__.
+    volumes: !reset []
     command: >
       sh -c "alembic upgrade head &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000"
