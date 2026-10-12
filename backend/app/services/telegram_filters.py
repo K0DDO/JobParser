@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from datetime import timedelta
 from typing import Any
@@ -252,7 +253,11 @@ def save_filters_to_settings(app_settings: Any, filters: dict[str, Any]) -> dict
 
 
 def filters_ready(filters: dict[str, Any]) -> bool:
-    """Рассылка если выбран хотя бы один критерий (объединение / OR)."""
+    """
+    Рассылка/browse если выбран хотя бы один «содержательный» критерий.
+    Одна только свежесть (max_age_hours) не считается — иначе после синка
+    матчились бы вообще все вакансии периода.
+    """
     f = normalize_filters(filters)
     return any(
         [
@@ -267,7 +272,6 @@ def filters_ready(filters: dict[str, Any]) -> bool:
             f["salary_from"] is not None,
             f["salary_to"] is not None,
             f["has_salary"] is not None,
-            f["max_age_hours"] is not None,
         ]
     )
 
@@ -333,9 +337,9 @@ def format_filters_summary(
     )
 
     status = (
-        "рассылка вкл (OR)"
+        "рассылка вкл"
         if filters_ready(f)
-        else "выбери любой критерий — иначе рассылка выкл"
+        else "выбери область/стек/… — иначе рассылка выкл"
     )
 
     return (
@@ -352,36 +356,92 @@ def format_filters_summary(
         f"Занятость: <b>{join_or(f['employment_types'], empl_labels, '—')}</b>\n"
         f"Свежесть карточек: <b>{age_line}</b>\n"
         f"Выгрузка (синк): <b>{lookback_line}</b>\n\n"
-        "Критерии работают как <b>объединение (OR)</b>: "
-        "достаточно совпадения по любому выбранному.\n"
+        "Внутри группы — <b>OR</b> (Backend или Frontend). "
+        "Между группами — <b>AND</b> (область и стек сразу). "
+        "Роль смотрим только в <b>названии</b> вакансии.\n"
         "/filters · /browse · /sync · /stats · /test · /status · /reset"
     )
 
 
-_ROLE_ALIASES = {
-    "analyst": ("analyst", "аналитик", "analysis", "аналитика"),
-    "data": ("data", "данн", "etl", "warehouse"),
-    "ml": ("machine learning", "ml ", " мл", "llm", "нейросет"),
-    "backend": ("backend", "бэкенд", "back-end", "бэк"),
-    "frontend": ("frontend", "фронтенд", "front-end", "фронт"),
+# Role → regexes applied to TITLE only (not description — иначе ML/AI
+# с фразой "backend services" ложно проходят как Backend).
+_ROLE_TITLE_PATTERNS: dict[str, tuple[str, ...]] = {
+    "backend": (
+        r"back[\s\-]?end",
+        r"бэк[\s\-]?енд",
+        r"бекенд",
+        r"бэкендер",
+    ),
+    "frontend": (
+        r"front[\s\-]?end",
+        r"фронт[\s\-]?енд",
+        r"фронтендер",
+    ),
+    "fullstack": (
+        r"full[\s\-]?stack",
+        r"фул[\s\-]?стек",
+        r"фуллстек",
+    ),
+    "mobile": (r"mobile", r"мобильн"),
+    "android": (r"android", r"андроид"),
+    "ios": (r"\bios\b", r"iphone", r"swift"),
+    "qa": (r"\bqa\b", r"тест[а-я]*", r"quality\s*assurance", r"sdet"),
+    "devops": (r"devops", r"dev[\s\-]?ops", r"sre"),
+    "sre": (r"\bsre\b", r"site\s*reliability"),
+    "data": (
+        r"data\s*engineer",
+        r"data\s*platform",
+        r"инженер\s*данн",
+        r"данны[мх]",
+        r"\betl\b",
+        r"warehouse",
+    ),
+    "ml": (
+        r"\bml\b",
+        r"machine\s*learning",
+        r"deep\s*learning",
+        r"llm",
+        r"нейросет",
+        r"mlops",
+    ),
+    "analyst": (
+        r"analyst",
+        r"аналитик",
+        r"analytics",
+        r"аналитик[аеи]",
+    ),
+    "architect": (r"architect", r"архитектор"),
+    "manager": (r"manager", r"менеджер", r"head\s+of", r"team\s*lead"),
+    "embedded": (r"embedded", r"встраиваем"),
+    "security": (r"security", r"безопасн", r"appsec", r"infosec"),
+    "python": (r"python", r"питон"),
+    "java": (r"\bjava\b"),
+    "go": (r"\bgolang\b", r"\bgo\s+developer\b", r"go\-developer"),
 }
 
 
 def _match_roles(vacancy: Any, roles: list[str]) -> bool:
+    """OR within roles; match title only."""
     title = (getattr(vacancy, "title", None) or "").lower()
-    blob = _blob(vacancy)
+    if not title:
+        return False
     for role in roles:
-        r = role.lower().strip()
-        if not r:
+        key = role.lower().strip()
+        if not key:
             continue
-        if r in title or r in blob:
-            return True
-        if any(a in blob for a in _ROLE_ALIASES.get(r, ())):
+        patterns = _ROLE_TITLE_PATTERNS.get(key)
+        if patterns:
+            if any(re.search(p, title, flags=re.IGNORECASE) for p in patterns):
+                return True
+            continue
+        # Fallback: whole-word-ish substring in title
+        if re.search(rf"(?<![a-zа-я0-9]){re.escape(key)}(?![a-zа-я0-9])", title, flags=re.I):
             return True
     return False
 
 
 def _match_skills(vacancy: Any, skills: list[str]) -> bool:
+    """OR within skills; title + skills + description."""
     blob = _blob(vacancy)
     return any(skill.lower().strip() in blob for skill in skills if skill.strip())
 
@@ -471,8 +531,11 @@ def _match_age(vacancy: Any, max_age_hours: int) -> bool:
 def vacancy_matches_telegram_filters(vacancy: Any, filters: dict[str, Any] | None = None, **legacy: Any) -> bool:
     """
     True if vacancy fits Telegram selections.
-    Groups are combined with OR (union): any matching selected group is enough.
-    Within a group values are also OR. Removed vacancies never match.
+
+    - Inside a group (roles / skills / …): OR
+    - Across groups: AND (все выбранные группы должны пройти)
+    - Role matches TITLE only (не description)
+    - max_age_hours / salary — уточняющие AND-ограничения
     """
     if getattr(vacancy, "removed_at", None) is not None:
         return False
@@ -486,33 +549,31 @@ def vacancy_matches_telegram_filters(vacancy: Any, filters: dict[str, Any] | Non
     if not filters_ready(f):
         return False
 
-    clauses: list[bool] = []
-    if f["roles"]:
-        clauses.append(_match_roles(vacancy, f["roles"]))
-    if f["skills"]:
-        clauses.append(_match_skills(vacancy, f["skills"]))
-    if f["work_formats"]:
-        clauses.append(_match_work_formats(vacancy, f["work_formats"]))
-    if f["experiences"]:
-        clauses.append(_match_experiences(vacancy, f["experiences"]))
-    if f["sources"]:
-        clauses.append(_match_sources(vacancy, f["sources"]))
-    if f["companies"]:
-        clauses.append(_match_companies(vacancy, f["companies"]))
-    if f["cities"]:
-        clauses.append(_match_cities(vacancy, f["cities"]))
-    if f["employment_types"]:
-        clauses.append(_match_employment(vacancy, f["employment_types"]))
+    if f["roles"] and not _match_roles(vacancy, f["roles"]):
+        return False
+    if f["skills"] and not _match_skills(vacancy, f["skills"]):
+        return False
+    if f["work_formats"] and not _match_work_formats(vacancy, f["work_formats"]):
+        return False
+    if f["experiences"] and not _match_experiences(vacancy, f["experiences"]):
+        return False
+    if f["sources"] and not _match_sources(vacancy, f["sources"]):
+        return False
+    if f["companies"] and not _match_companies(vacancy, f["companies"]):
+        return False
+    if f["cities"] and not _match_cities(vacancy, f["cities"]):
+        return False
+    if f["employment_types"] and not _match_employment(vacancy, f["employment_types"]):
+        return False
     if f["salary_from"] is not None or f["salary_to"] is not None or f["has_salary"] is not None:
-        clauses.append(
-            _match_salary(
-                vacancy,
-                salary_from=f["salary_from"],
-                salary_to=f["salary_to"],
-                has_salary=f["has_salary"],
-            )
-        )
-    if f["max_age_hours"] is not None:
-        clauses.append(_match_age(vacancy, f["max_age_hours"]))
+        if not _match_salary(
+            vacancy,
+            salary_from=f["salary_from"],
+            salary_to=f["salary_to"],
+            has_salary=f["has_salary"],
+        ):
+            return False
+    if f["max_age_hours"] is not None and not _match_age(vacancy, f["max_age_hours"]):
+        return False
 
-    return any(clauses) if clauses else False
+    return True
