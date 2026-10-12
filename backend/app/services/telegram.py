@@ -69,16 +69,18 @@ async def send_photo_bytes(
 
 
 async def notify_startup() -> bool:
-    """Ping the chat when backend boots so Telegram wiring is visible."""
+    """Ping the chat when backend boots and show filter buttons."""
     if not telegram_configured():
         return False
-    text = (
-        "<b>JobParser запущен</b>\n"
-        "Синк по расписанию активен.\n"
-        "Новые вакансии по профилю буду присылать карточками сюда."
-    )
     try:
-        await send_message(text)
+        from app.services.telegram_bot import send_filters_menu
+
+        await send_message(
+            "<b>JobParser запущен</b>\n"
+            "Синк активен. Выбери профессии кнопками — "
+            "карточки буду слать только по выбранным."
+        )
+        await send_filters_menu()
         return True
     except Exception as exc:  # noqa: BLE001
         logger.warning("Telegram startup notify failed: %s", exc)
@@ -89,11 +91,12 @@ async def send_vacancy_card(
     vacancy: Vacancy,
     *,
     profile_name: str | None = None,
+    force: bool = False,
 ) -> bool:
     """Render and send one vacancy card. Returns True on success."""
     if not telegram_configured():
         return False
-    if vacancy.telegram_notified_at is not None:
+    if not force and vacancy.telegram_notified_at is not None:
         return False
     caption = build_caption(vacancy, profile_name=profile_name)
     photo = render_banner_png(vacancy)

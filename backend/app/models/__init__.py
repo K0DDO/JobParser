@@ -193,6 +193,8 @@ class AppSettings(Base):
     sync_lookback_days: Mapped[int] = mapped_column(Integer, default=7)
     timezone: Mapped[str] = mapped_column(String(64), default="Europe/Moscow")
     notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    telegram_roles: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
+    telegram_work_formats: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
 
     global_auto_apply: Mapped[bool] = mapped_column(Boolean, default=False)
     dry_run: Mapped[bool] = mapped_column(Boolean, default=True)

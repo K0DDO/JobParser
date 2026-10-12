@@ -13,6 +13,7 @@ from app.core.timeutil import utc_now_naive
 from app.services.salary_backfill import backfill_monthly_salaries
 from app.services.settings_service import ensure_default_sources, get_or_create_settings
 from app.services.telegram import notify_startup
+from app.services.telegram_bot import start_telegram_bot, stop_telegram_bot
 
 logger = logging.getLogger(__name__)
 
@@ -38,12 +39,14 @@ async def lifespan(_: FastAPI):
     await refresh_rates(force=True)
     start_scheduler()
     await reschedule_from_db()
+    start_telegram_bot()
     try:
         if await notify_startup():
             logger.info("Telegram startup message sent")
     except Exception:  # noqa: BLE001
         logger.exception("Telegram startup notify crashed")
     yield
+    await stop_telegram_bot()
     stop_scheduler()
 
 
