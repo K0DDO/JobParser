@@ -100,7 +100,6 @@ def _nav_footer(*extra: list[dict[str, str]]) -> list[list[dict[str, str]]]:
 
 def _main_keyboard(filters: dict[str, Any]) -> dict[str, Any]:
     roles_n = len(filters["roles"])
-    skills_n = len(filters["skills"])
     rows = [
         [_btn(f"1️⃣ Область ({roles_n})", "m:roles")],
         [
