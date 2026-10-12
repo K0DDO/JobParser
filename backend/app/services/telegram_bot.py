@@ -1,4 +1,4 @@
-"""Telegram long-polling bot: filter buttons + commands."""
+"""Telegram long-polling bot: multi-step filter wizard + commands."""
 
 from __future__ import annotations
 
@@ -12,15 +12,29 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.db.session import AsyncSessionLocal
-from app.models import AppSettings, Vacancy
+from app.models import Vacancy
+from app.services.settings_service import get_or_create_settings
 from app.services.telegram import send_message, telegram_configured
 from app.services.telegram_cards import build_caption, render_banner_png
 from app.services.telegram_filters import (
+    TELEGRAM_AGE_HOURS,
+    TELEGRAM_CITIES,
+    TELEGRAM_COMPANIES,
+    TELEGRAM_EMPLOYMENT,
+    TELEGRAM_EXPERIENCES,
+    TELEGRAM_FRAMEWORKS,
+    TELEGRAM_LANGUAGES,
+    TELEGRAM_PORTALS,
     TELEGRAM_ROLES,
+    TELEGRAM_SALARY_FROM,
+    TELEGRAM_SALARY_TO,
     TELEGRAM_WORK_FORMATS,
+    empty_filters,
+    format_filters_summary,
+    load_filters_from_settings,
+    save_filters_to_settings,
     vacancy_matches_telegram_filters,
 )
-from app.services.settings_service import get_or_create_settings
 
 logger = logging.getLogger(__name__)
 
@@ -28,84 +42,286 @@ TELEGRAM_API = "https://api.telegram.org"
 _poll_task: asyncio.Task | None = None
 _stop = asyncio.Event()
 
+ROLE_KEYS = {k for k, _ in TELEGRAM_ROLES}
+STACK_KEYS = set(TELEGRAM_LANGUAGES + TELEGRAM_FRAMEWORKS)
+FMT_KEYS = {k for k, _ in TELEGRAM_WORK_FORMATS}
+EXP_KEYS = {k for k, _ in TELEGRAM_EXPERIENCES}
+PORTAL_KEYS = {k for k, _ in TELEGRAM_PORTALS}
+COMPANY_KEYS = {q for q, _ in TELEGRAM_COMPANIES}
+EMPL_KEYS = {k for k, _ in TELEGRAM_EMPLOYMENT}
+CITY_KEYS = set(TELEGRAM_CITIES)
+
 
 def _allowed_chat(chat_id: Any) -> bool:
     expected = str(settings.telegram_chat_id).strip()
-    return expected and str(chat_id) == expected
+    return bool(expected) and str(chat_id) == expected
 
 
-def _roles_keyboard(selected: list[str]) -> dict[str, Any]:
-    selected_set = {r.lower() for r in selected}
+def _btn(text: str, data: str) -> dict[str, str]:
+    return {"text": text[:64], "callback_data": data[:64]}
+
+
+def _rows_of(items: list[dict[str, str]], per_row: int = 2) -> list[list[dict[str, str]]]:
     rows: list[list[dict[str, str]]] = []
     row: list[dict[str, str]] = []
-    for role in TELEGRAM_ROLES:
-        mark = "✅ " if role.lower() in selected_set else ""
-        row.append(
-            {
-                "text": f"{mark}{role}",
-                "callback_data": f"role:{role}",
-            }
-        )
-        if len(row) == 3:
+    for item in items:
+        row.append(item)
+        if len(row) >= per_row:
             rows.append(row)
             row = []
     if row:
         rows.append(row)
+    return rows
+
+
+def _toggle(items: list[str], value: str) -> list[str]:
+    out = list(items)
+    key = value.lower()
+    if any(x.lower() == key for x in out):
+        return [x for x in out if x.lower() != key]
+    out.append(value)
+    return out
+
+
+def _mark(selected: bool, label: str) -> str:
+    return f"{'✅ ' if selected else ''}{label}"
+
+
+def _nav_footer(*extra: list[dict[str, str]]) -> list[list[dict[str, str]]]:
+    rows = list(extra)
     rows.append(
         [
-            {"text": "🧹 Сбросить роли", "callback_data": "roles:clear"},
-            {"text": "📦 Формат работы", "callback_data": "menu:formats"},
+            _btn("⬅️ Меню", "m:main"),
+            _btn("🧪 Тест", "cmd:test"),
         ]
     )
-    rows.append([{"text": "🧪 Тестовая вакансия", "callback_data": "cmd:test"}])
+    return rows
+
+
+def _main_keyboard(filters: dict[str, Any]) -> dict[str, Any]:
+    roles_n = len(filters["roles"])
+    skills_n = len(filters["skills"])
+    rows = [
+        [_btn(f"1️⃣ Область ({roles_n})", "m:roles")],
+        [
+            _btn(
+                f"2️⃣ Языки ({sum(1 for s in filters['skills'] if s in TELEGRAM_LANGUAGES)})",
+                "m:langs",
+            ),
+            _btn(
+                f"2️⃣ Фреймворки ({sum(1 for s in filters['skills'] if s in TELEGRAM_FRAMEWORKS)})",
+                "m:fw",
+            ),
+        ],
+        [
+            _btn(f"Формат ({len(filters['work_formats'])})", "m:format"),
+            _btn(f"Опыт ({len(filters['experiences'])})", "m:exp"),
+        ],
+        [
+            _btn("Зарплата", "m:salary"),
+            _btn(f"Порталы ({len(filters['sources'])})", "m:portal"),
+        ],
+        [
+            _btn(f"Компании ({len(filters['companies'])})", "m:company"),
+            _btn(f"Города ({len(filters['cities'])})", "m:city"),
+        ],
+        [
+            _btn(f"Занятость ({len(filters['employment_types'])})", "m:empl"),
+            _btn("Период", "m:age"),
+        ],
+        [
+            _btn("🧹 Сбросить всё", "c:all"),
+            _btn("🧪 Тестовая вакансия", "cmd:test"),
+        ],
+    ]
     return {"inline_keyboard": rows}
 
 
-def _formats_keyboard(selected: list[str]) -> dict[str, Any]:
-    selected_set = {f.lower() for f in selected}
-    rows: list[list[dict[str, str]]] = []
-    row: list[dict[str, str]] = []
-    for key, label in TELEGRAM_WORK_FORMATS:
-        mark = "✅ " if key.lower() in selected_set else ""
-        row.append(
-            {
-                "text": f"{mark}{label}",
-                "callback_data": f"fmt:{key}",
-            }
+def _roles_keyboard(filters: dict[str, Any]) -> dict[str, Any]:
+    selected = {r.lower() for r in filters["roles"]}
+    buttons = [
+        _btn(_mark(key.lower() in selected, label), f"t:r:{key}")
+        for key, label in TELEGRAM_ROLES
+    ]
+    rows = _rows_of(buttons, 2)
+    rows.append([_btn("🧹 Сбросить область", "c:roles"), _btn("➡️ К языкам", "m:langs")])
+    rows.extend(_nav_footer())
+    return {"inline_keyboard": rows}
+
+
+def _langs_keyboard(filters: dict[str, Any]) -> dict[str, Any]:
+    selected = {s.lower() for s in filters["skills"]}
+    buttons = [
+        _btn(_mark(lang.lower() in selected, lang), f"t:sk:{lang}")
+        for lang in TELEGRAM_LANGUAGES
+    ]
+    rows = _rows_of(buttons, 3)
+    rows.append(
+        [
+            _btn("🧹 Сбросить языки", "c:langs"),
+            _btn("➡️ Фреймворки", "m:fw"),
+        ]
+    )
+    rows.extend(_nav_footer())
+    return {"inline_keyboard": rows}
+
+
+def _fw_keyboard(filters: dict[str, Any]) -> dict[str, Any]:
+    selected = {s.lower() for s in filters["skills"]}
+    buttons = [
+        _btn(_mark(fw.lower() in selected, fw), f"t:sk:{fw}")
+        for fw in TELEGRAM_FRAMEWORKS
+    ]
+    rows = _rows_of(buttons, 2)
+    rows.append(
+        [
+            _btn("🧹 Сбросить фреймворки", "c:fw"),
+            _btn("➡️ Формат", "m:format"),
+        ]
+    )
+    rows.extend(_nav_footer())
+    return {"inline_keyboard": rows}
+
+
+def _format_keyboard(filters: dict[str, Any]) -> dict[str, Any]:
+    selected = {x.lower() for x in filters["work_formats"]}
+    buttons = [
+        _btn(_mark(key.lower() in selected, label), f"t:fmt:{key}")
+        for key, label in TELEGRAM_WORK_FORMATS
+    ]
+    rows = _rows_of(buttons, 3)
+    rows.append([_btn("🧹 Сбросить формат", "c:format")])
+    rows.extend(_nav_footer())
+    return {"inline_keyboard": rows}
+
+
+def _exp_keyboard(filters: dict[str, Any]) -> dict[str, Any]:
+    selected = set(filters["experiences"])
+    buttons = [
+        _btn(_mark(key in selected, label), f"t:exp:{key}")
+        for key, label in TELEGRAM_EXPERIENCES
+    ]
+    rows = _rows_of(buttons, 2)
+    rows.append([_btn("🧹 Сбросить опыт", "c:exp")])
+    rows.extend(_nav_footer())
+    return {"inline_keyboard": rows}
+
+
+def _salary_keyboard(filters: dict[str, Any]) -> dict[str, Any]:
+    from_v = filters.get("salary_from")
+    to_v = filters.get("salary_to")
+    has = filters.get("has_salary")
+    rows: list[list[dict[str, str]]] = [[_btn("── от ₽ / мес ──", "noop")]]
+    rows.extend(
+        _rows_of(
+            [
+                _btn(_mark(from_v == n, f"от {n // 1000}к"), f"s:from:{n}")
+                for n in TELEGRAM_SALARY_FROM
+            ],
+            3,
         )
-        if len(row) == 3:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
+    )
+    rows.append([_btn("── до ₽ / мес ──", "noop")])
+    rows.extend(
+        _rows_of(
+            [
+                _btn(_mark(to_v == n, f"до {n // 1000}к"), f"s:to:{n}")
+                for n in TELEGRAM_SALARY_TO
+            ],
+            3,
+        )
+    )
     rows.append(
         [
-            {"text": "🧹 Сбросить формат", "callback_data": "formats:clear"},
-            {"text": "💼 Профессии", "callback_data": "menu:roles"},
+            _btn(_mark(has is True, "Только с вилкой"), "s:has:1"),
+            _btn(_mark(has is False, "Без вилки"), "s:has:0"),
         ]
     )
+    rows.append([_btn("🧹 Сбросить зарплату", "c:salary")])
+    rows.extend(_nav_footer())
     return {"inline_keyboard": rows}
 
 
-def _status_text(app_settings: AppSettings) -> str:
-    roles = app_settings.telegram_roles or []
-    formats = app_settings.telegram_work_formats or []
-    fmt_labels = {
-        key: label for key, label in TELEGRAM_WORK_FORMATS
-    }
-    roles_line = ", ".join(roles) if roles else "не выбраны (рассылка выкл)"
-    formats_line = (
-        ", ".join(fmt_labels.get(f, f) for f in formats)
-        if formats
-        else "любой"
+def _portal_keyboard(filters: dict[str, Any]) -> dict[str, Any]:
+    selected = {s.lower() for s in filters["sources"]}
+    buttons = [
+        _btn(_mark(key.lower() in selected, label), f"t:src:{key}")
+        for key, label in TELEGRAM_PORTALS
+    ]
+    rows = _rows_of(buttons, 3)
+    rows.append([_btn("🧹 Все порталы", "c:portal")])
+    rows.extend(_nav_footer())
+    return {"inline_keyboard": rows}
+
+
+def _company_keyboard(filters: dict[str, Any]) -> dict[str, Any]:
+    selected = {c.lower() for c in filters["companies"]}
+    buttons = [
+        _btn(_mark(query.lower() in selected, label), f"t:co:{query}")
+        for query, label in TELEGRAM_COMPANIES
+    ]
+    rows = _rows_of(buttons, 2)
+    rows.append([_btn("🧹 Все компании", "c:company")])
+    rows.extend(_nav_footer())
+    return {"inline_keyboard": rows}
+
+
+def _city_keyboard(filters: dict[str, Any]) -> dict[str, Any]:
+    selected = {c.lower() for c in filters["cities"]}
+    buttons = [
+        _btn(_mark(city.lower() in selected, city), f"t:ci:{city}")
+        for city in TELEGRAM_CITIES
+    ]
+    rows = _rows_of(buttons, 2)
+    rows.append([_btn("🧹 Все города", "c:city")])
+    rows.extend(_nav_footer())
+    return {"inline_keyboard": rows}
+
+
+def _empl_keyboard(filters: dict[str, Any]) -> dict[str, Any]:
+    selected = {e.lower() for e in filters["employment_types"]}
+    buttons = [
+        _btn(_mark(key.lower() in selected, label), f"t:em:{key}")
+        for key, label in TELEGRAM_EMPLOYMENT
+    ]
+    rows = _rows_of(buttons, 2)
+    rows.append([_btn("🧹 Любая занятость", "c:empl")])
+    rows.extend(_nav_footer())
+    return {"inline_keyboard": rows}
+
+
+def _age_keyboard(filters: dict[str, Any]) -> dict[str, Any]:
+    current = filters.get("max_age_hours")
+    buttons = [
+        _btn(_mark(current == hours, label), f"s:age:{hours}")
+        for hours, label in TELEGRAM_AGE_HOURS
+    ]
+    rows = _rows_of(buttons, 3)
+    rows.append(
+        [
+            _btn(_mark(current is None, "любой"), "s:age:0"),
+            _btn("🧹 Сброс периода", "c:age"),
+        ]
     )
-    return (
-        "<b>Фильтры Telegram</b>\n"
-        f"Профессии: <b>{roles_line}</b>\n"
-        f"Формат: <b>{formats_line}</b>\n\n"
-        "Жми кнопки ниже — включи нужные профессии.\n"
-        "Команды: /filters · /test · /status"
-    )
+    rows.extend(_nav_footer())
+    return {"inline_keyboard": rows}
+
+
+def _keyboard_for(menu: str, filters: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "main": _main_keyboard,
+        "roles": _roles_keyboard,
+        "langs": _langs_keyboard,
+        "fw": _fw_keyboard,
+        "format": _format_keyboard,
+        "exp": _exp_keyboard,
+        "salary": _salary_keyboard,
+        "portal": _portal_keyboard,
+        "company": _company_keyboard,
+        "city": _city_keyboard,
+        "empl": _empl_keyboard,
+        "age": _age_keyboard,
+    }.get(menu, _main_keyboard)(filters)
 
 
 async def _api(
@@ -142,7 +358,7 @@ async def _edit_or_send(
 ) -> None:
     payload = {
         "chat_id": chat_id,
-        "text": text,
+        "text": text[:4096],
         "parse_mode": "HTML",
         "reply_markup": json.dumps(reply_markup, ensure_ascii=False),
         "disable_web_page_preview": "true",
@@ -157,31 +373,29 @@ async def _edit_or_send(
     await _api("sendMessage", payload)
 
 
-async def _toggle_list(current: list[str] | None, value: str) -> list[str]:
-    items = list(current or [])
-    lower = {x.lower(): x for x in items}
-    key = value.lower()
-    if key in lower:
-        items = [x for x in items if x.lower() != key]
-    else:
-        items.append(value)
-    return items
+async def _show_menu(
+    chat_id: str,
+    filters: dict[str, Any],
+    menu: str = "main",
+    message_id: int | None = None,
+) -> None:
+    await _edit_or_send(
+        chat_id,
+        format_filters_summary(filters),
+        _keyboard_for(menu, filters),
+        message_id=message_id,
+    )
 
 
 async def _send_test_card(chat_id: str) -> None:
     async with AsyncSessionLocal() as session:
         app_settings = await get_or_create_settings(session)
-        result = await session.execute(
-            select(Vacancy).order_by(Vacancy.id.desc()).limit(40)
-        )
+        filters = load_filters_from_settings(app_settings)
+        result = await session.execute(select(Vacancy).order_by(Vacancy.id.desc()).limit(80))
         vacancies = list(result.scalars().all())
         chosen: Vacancy | None = None
         for vac in vacancies:
-            if vacancy_matches_telegram_filters(
-                vac,
-                roles=app_settings.telegram_roles,
-                work_formats=app_settings.telegram_work_formats,
-            ):
+            if vacancy_matches_telegram_filters(vac, filters):
                 chosen = vac
                 break
         if chosen is None and vacancies:
@@ -193,7 +407,6 @@ async def _send_test_card(chat_id: str) -> None:
             return
         caption = build_caption(chosen, profile_name="тест")
         photo = render_banner_png(chosen)
-        # force path: send without marking notified if already notified
         data = {
             "chat_id": chat_id,
             "caption": caption[:1024],
@@ -208,6 +421,53 @@ async def _send_test_card(chat_id: str) -> None:
         )
 
 
+def _apply_clear(filters: dict[str, Any], what: str) -> dict[str, Any]:
+    if what == "all":
+        return empty_filters()
+    if what == "roles":
+        filters["roles"] = []
+    elif what == "langs":
+        filters["skills"] = [s for s in filters["skills"] if s not in TELEGRAM_LANGUAGES]
+    elif what == "fw":
+        filters["skills"] = [s for s in filters["skills"] if s not in TELEGRAM_FRAMEWORKS]
+    elif what == "format":
+        filters["work_formats"] = []
+    elif what == "exp":
+        filters["experiences"] = []
+    elif what == "salary":
+        filters["salary_from"] = None
+        filters["salary_to"] = None
+        filters["has_salary"] = None
+    elif what == "portal":
+        filters["sources"] = []
+    elif what == "company":
+        filters["companies"] = []
+    elif what == "city":
+        filters["cities"] = []
+    elif what == "empl":
+        filters["employment_types"] = []
+    elif what == "age":
+        filters["max_age_hours"] = None
+    return filters
+
+
+def _menu_after_clear(what: str) -> str:
+    return {
+        "roles": "roles",
+        "langs": "langs",
+        "fw": "fw",
+        "format": "format",
+        "exp": "exp",
+        "salary": "salary",
+        "portal": "portal",
+        "company": "company",
+        "city": "city",
+        "empl": "empl",
+        "age": "age",
+        "all": "main",
+    }.get(what, "main")
+
+
 async def _handle_callback(callback: dict[str, Any]) -> None:
     data = str(callback.get("data") or "")
     message = callback.get("message") or {}
@@ -218,85 +478,20 @@ async def _handle_callback(callback: dict[str, Any]) -> None:
     if not _allowed_chat(chat_id):
         await _answer_callback(callback_id, "Чат не привязан")
         return
+    if data == "noop":
+        await _answer_callback(callback_id)
+        return
 
     async with AsyncSessionLocal() as session:
         app_settings = await get_or_create_settings(session)
-        roles = list(app_settings.telegram_roles or [])
-        formats = list(app_settings.telegram_work_formats or [])
+        filters = load_filters_from_settings(app_settings)
+        menu = "main"
+        toast = ""
 
-        if data.startswith("role:"):
-            role = data.split(":", 1)[1]
-            if role in TELEGRAM_ROLES:
-                roles = await _toggle_list(roles, role)
-                app_settings.telegram_roles = roles
-                await session.commit()
-                await _answer_callback(callback_id, f"{role}")
-                await _edit_or_send(
-                    chat_id,
-                    _status_text(app_settings),
-                    _roles_keyboard(roles),
-                    message_id=message_id,
-                )
-            return
-
-        if data.startswith("fmt:"):
-            fmt = data.split(":", 1)[1]
-            keys = {k for k, _ in TELEGRAM_WORK_FORMATS}
-            if fmt in keys:
-                formats = await _toggle_list(formats, fmt)
-                app_settings.telegram_work_formats = formats
-                await session.commit()
-                await _answer_callback(callback_id, fmt)
-                await _edit_or_send(
-                    chat_id,
-                    _status_text(app_settings),
-                    _formats_keyboard(formats),
-                    message_id=message_id,
-                )
-            return
-
-        if data == "roles:clear":
-            app_settings.telegram_roles = []
-            await session.commit()
-            await _answer_callback(callback_id, "Роли сброшены")
-            await _edit_or_send(
-                chat_id,
-                _status_text(app_settings),
-                _roles_keyboard([]),
-                message_id=message_id,
-            )
-            return
-
-        if data == "formats:clear":
-            app_settings.telegram_work_formats = []
-            await session.commit()
-            await _answer_callback(callback_id, "Формат сброшен")
-            await _edit_or_send(
-                chat_id,
-                _status_text(app_settings),
-                _formats_keyboard([]),
-                message_id=message_id,
-            )
-            return
-
-        if data == "menu:roles":
+        if data.startswith("m:"):
+            menu = data.split(":", 1)[1] or "main"
             await _answer_callback(callback_id)
-            await _edit_or_send(
-                chat_id,
-                _status_text(app_settings),
-                _roles_keyboard(roles),
-                message_id=message_id,
-            )
-            return
-
-        if data == "menu:formats":
-            await _answer_callback(callback_id)
-            await _edit_or_send(
-                chat_id,
-                _status_text(app_settings),
-                _formats_keyboard(formats),
-                message_id=message_id,
-            )
+            await _show_menu(chat_id, filters, menu, message_id=message_id)
             return
 
         if data == "cmd:test":
@@ -304,7 +499,106 @@ async def _handle_callback(callback: dict[str, Any]) -> None:
             await _send_test_card(chat_id)
             return
 
-        await _answer_callback(callback_id)
+        if data.startswith("c:"):
+            what = data.split(":", 1)[1]
+            filters = _apply_clear(filters, what)
+            save_filters_to_settings(app_settings, filters)
+            await session.commit()
+            await _answer_callback(callback_id, "Сброшено")
+            await _show_menu(chat_id, filters, _menu_after_clear(what), message_id=message_id)
+            return
+
+        changed = True
+        if data.startswith("t:r:"):
+            role = data[4:]
+            if role not in ROLE_KEYS:
+                changed = False
+            else:
+                filters["roles"] = _toggle(filters["roles"], role)
+                toast, menu = role, "roles"
+        elif data.startswith("t:sk:"):
+            skill = data[5:]
+            if skill not in STACK_KEYS:
+                changed = False
+            else:
+                filters["skills"] = _toggle(filters["skills"], skill)
+                toast = skill
+                menu = "langs" if skill in TELEGRAM_LANGUAGES else "fw"
+        elif data.startswith("t:fmt:"):
+            fmt = data[6:]
+            if fmt not in FMT_KEYS:
+                changed = False
+            else:
+                filters["work_formats"] = _toggle(filters["work_formats"], fmt)
+                toast, menu = fmt, "format"
+        elif data.startswith("t:exp:"):
+            exp = data[6:]
+            if exp not in EXP_KEYS:
+                changed = False
+            else:
+                filters["experiences"] = _toggle(filters["experiences"], exp)
+                toast, menu = exp, "exp"
+        elif data.startswith("t:src:"):
+            src = data[6:]
+            if src not in PORTAL_KEYS:
+                changed = False
+            else:
+                filters["sources"] = _toggle(filters["sources"], src)
+                toast, menu = src, "portal"
+        elif data.startswith("t:co:"):
+            company = data[5:]
+            if company not in COMPANY_KEYS:
+                changed = False
+            else:
+                filters["companies"] = _toggle(filters["companies"], company)
+                toast, menu = company, "company"
+        elif data.startswith("t:ci:"):
+            city = data[5:]
+            if city not in CITY_KEYS:
+                changed = False
+            else:
+                filters["cities"] = _toggle(filters["cities"], city)
+                toast, menu = city, "city"
+        elif data.startswith("t:em:"):
+            empl = data[5:]
+            if empl not in EMPL_KEYS:
+                changed = False
+            else:
+                filters["employment_types"] = _toggle(filters["employment_types"], empl)
+                toast, menu = empl, "empl"
+        elif data.startswith("s:from:"):
+            value = int(data.split(":")[-1])
+            filters["salary_from"] = None if filters.get("salary_from") == value else value
+            toast, menu = f"от {value}", "salary"
+        elif data.startswith("s:to:"):
+            value = int(data.split(":")[-1])
+            filters["salary_to"] = None if filters.get("salary_to") == value else value
+            toast, menu = f"до {value}", "salary"
+        elif data.startswith("s:has:"):
+            flag = data.endswith(":1")
+            filters["has_salary"] = None if filters.get("has_salary") is flag else flag
+            toast, menu = "вилка", "salary"
+        elif data.startswith("s:age:"):
+            hours = int(data.split(":")[-1])
+            if hours == 0:
+                filters["max_age_hours"] = None
+            elif filters.get("max_age_hours") == hours:
+                filters["max_age_hours"] = None
+            else:
+                filters["max_age_hours"] = hours
+            toast, menu = "период", "age"
+        else:
+            await _answer_callback(callback_id)
+            return
+
+        if not changed:
+            await _answer_callback(callback_id)
+            return
+
+        save_filters_to_settings(app_settings, filters)
+        await session.commit()
+        await _answer_callback(callback_id, toast)
+        await _show_menu(chat_id, filters, menu, message_id=message_id)
 
 
 async def _handle_message(message: dict[str, Any]) -> None:
@@ -317,27 +611,21 @@ async def _handle_message(message: dict[str, Any]) -> None:
 
     async with AsyncSessionLocal() as session:
         app_settings = await get_or_create_settings(session)
-        roles = list(app_settings.telegram_roles or [])
-        formats = list(app_settings.telegram_work_formats or [])
+        filters = load_filters_from_settings(app_settings)
 
         if cmd in {"/start", "/filters", "/menu"}:
-            await _edit_or_send(
-                chat_id,
-                _status_text(app_settings),
-                _roles_keyboard(roles),
-            )
-            return
-
-        if cmd == "/formats":
-            await _edit_or_send(
-                chat_id,
-                _status_text(app_settings),
-                _formats_keyboard(formats),
-            )
+            await _show_menu(chat_id, filters, "main")
             return
 
         if cmd == "/status":
-            await send_message(_status_text(app_settings))
+            await send_message(format_filters_summary(filters))
+            return
+
+        if cmd == "/reset":
+            filters = empty_filters()
+            save_filters_to_settings(app_settings, filters)
+            await session.commit()
+            await _show_menu(chat_id, filters, "main")
             return
 
         if cmd == "/test":
@@ -347,10 +635,10 @@ async def _handle_message(message: dict[str, Any]) -> None:
         if text.startswith("/"):
             await send_message(
                 "Команды:\n"
-                "/filters — кнопки профессий\n"
-                "/formats — формат работы\n"
+                "/filters — мастер фильтров\n"
+                "/status — текущий выбор\n"
                 "/test — тестовая карточка\n"
-                "/status — текущий выбор"
+                "/reset — сбросить всё"
             )
 
 
@@ -368,7 +656,6 @@ async def _poll_loop() -> None:
         return
     offset = 0
     logger.info("Telegram bot poller started")
-    # Drop pending updates so we don't replay old /start spam
     try:
         body = await _api("getUpdates", {"offset": -1, "timeout": "0"})
         results = body.get("result") or []
@@ -423,15 +710,10 @@ async def stop_telegram_bot() -> None:
 
 
 async def send_filters_menu() -> bool:
-    """Push filter keyboard to the bound chat (startup / after deploy)."""
     if not telegram_configured():
         return False
     async with AsyncSessionLocal() as session:
         app_settings = await get_or_create_settings(session)
-        roles = list(app_settings.telegram_roles or [])
-        await _edit_or_send(
-            str(settings.telegram_chat_id).strip(),
-            _status_text(app_settings),
-            _roles_keyboard(roles),
-        )
+        filters = load_filters_from_settings(app_settings)
+        await _show_menu(str(settings.telegram_chat_id).strip(), filters, "main")
     return True

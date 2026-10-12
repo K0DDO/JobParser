@@ -195,6 +195,7 @@ class AppSettings(Base):
     notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     telegram_roles: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
     telegram_work_formats: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
+    telegram_filters: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     global_auto_apply: Mapped[bool] = mapped_column(Boolean, default=False)
     dry_run: Mapped[bool] = mapped_column(Boolean, default=True)

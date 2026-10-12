@@ -23,7 +23,10 @@ from app.services.hh_auth import ensure_hh_token
 from app.services.logging_service import add_log, add_notification
 from app.services.settings_service import compute_next_sync, get_or_create_settings
 from app.services.telegram import notify_new_matched_vacancies, telegram_configured
-from app.services.telegram_filters import vacancy_matches_telegram_filters
+from app.services.telegram_filters import (
+    load_filters_from_settings,
+    vacancy_matches_telegram_filters,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -243,6 +246,7 @@ async def run_sync(*, triggered_by: str = "scheduler") -> dict:
             new_ids = {v.id for v in new_vacancies if v.id is not None}
             telegram_queue: list[tuple[Vacancy, str | None]] = []
             telegram_queued_ids: set[int] = set()
+            tg_filters = load_filters_from_settings(settings)
 
             for vacancy in all_recent:
                 matched_any = False
@@ -272,11 +276,7 @@ async def run_sync(*, triggered_by: str = "scheduler") -> dict:
                         vacancy.id in new_ids
                         and vacancy.id not in telegram_queued_ids
                         and vacancy.telegram_notified_at is None
-                        and vacancy_matches_telegram_filters(
-                            vacancy,
-                            roles=settings.telegram_roles,
-                            work_formats=settings.telegram_work_formats,
-                        )
+                        and vacancy_matches_telegram_filters(vacancy, tg_filters)
                     ):
                         telegram_queue.append((vacancy, profile.name))
                         telegram_queued_ids.add(vacancy.id)
