@@ -23,6 +23,7 @@ class VacancyStatus(StrEnum):
     MATCHED = "matched"
     IGNORED = "ignored"
     EXPIRED = "expired"
+    REMOVED = "removed"
 
 
 class WorkFormat(StrEnum):

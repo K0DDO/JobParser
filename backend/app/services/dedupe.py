@@ -1,6 +1,8 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.enums import VacancyStatus
+from app.core.timeutil import utc_now_naive
 from app.models import Vacancy
 from app.schemas import VacancyData
 from app.services.normalize import build_fingerprint, canonicalize_url, normalize_vacancy
@@ -54,12 +56,20 @@ def apply_vacancy_update(vacancy: Vacancy, data: VacancyData) -> Vacancy:
     vacancy.contacts = data.contacts
     vacancy.raw_data = data.raw_data
     vacancy.source_metadata = data.source_metadata
+    now = utc_now_naive()
+    vacancy.last_seen_at = now
+    # Reappeared on source feed → revive history row
+    if vacancy.removed_at is not None:
+        vacancy.removed_at = None
+        if vacancy.status in {VacancyStatus.REMOVED, VacancyStatus.EXPIRED, "removed", "expired"}:
+            vacancy.status = VacancyStatus.NEW
     return vacancy
 
 
 async def upsert_vacancy(session: AsyncSession, data: VacancyData) -> tuple[Vacancy, bool]:
     """
     Insert or update vacancy. Returns (vacancy, created).
+    Keeps history: never deletes; clears removed_at when seen again.
     """
     data = normalize_vacancy(data)
     existing = await find_existing_vacancy(session, data)
@@ -71,6 +81,7 @@ async def upsert_vacancy(session: AsyncSession, data: VacancyData) -> tuple[Vaca
         await session.flush()
         return existing, False
 
+    now = utc_now_naive()
     vacancy = Vacancy(
         source=data.source,
         source_vacancy_id=data.source_vacancy_id,
@@ -94,6 +105,8 @@ async def upsert_vacancy(session: AsyncSession, data: VacancyData) -> tuple[Vaca
         raw_data=data.raw_data,
         source_metadata=data.source_metadata,
         status="new",
+        last_seen_at=now,
+        removed_at=None,
     )
     session.add(vacancy)
     await session.flush()

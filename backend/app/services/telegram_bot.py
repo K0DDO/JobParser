@@ -139,9 +139,10 @@ def _main_keyboard(
             _btn("Свежесть", "m:age"),
         ],
         [
-            _btn("🧹 Сбросить всё", "c:all"),
+            _btn("📊 Статистика", "cmd:stats"),
             _btn("🧪 Тестовая вакансия", "cmd:test"),
         ],
+        [_btn("🧹 Сбросить всё", "c:all")],
     ]
     return {"inline_keyboard": rows}
 
@@ -455,10 +456,12 @@ async def _run_sync_and_report(chat_id: str, days: int) -> None:
             f"fetched={result.get('fetched', 0)} · "
             f"новых={result.get('created', 0)} · "
             f"обновлено={result.get('updated', 0)} · "
+            f"удалено={result.get('removed', 0)} · "
             f"matched={result.get('matched', 0)}"
             + (f" · telegram={tg_sent}" if tg_sent else "")
             + "\n\n"
-            "<i>created=0 часто нормально: вакансии уже были в базе.</i>"
+            "<i>created=0 часто нормально: вакансии уже были в базе. "
+            "Удалённые остаются в истории.</i>"
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("Telegram sync failed")
@@ -466,6 +469,14 @@ async def _run_sync_and_report(chat_id: str, days: int) -> None:
             await send_message(f"❌ Синк ошибка: <code>{str(exc)[:500]}</code>")
         except Exception:  # noqa: BLE001
             pass
+
+
+async def _send_stats(chat_id: str) -> None:
+    from app.services.telegram_stats import collect_vacancy_stats, format_stats_message
+
+    async with AsyncSessionLocal() as session:
+        stats = await collect_vacancy_stats(session)
+    await send_message(format_stats_message(stats))
 
 
 async def _send_test_card(chat_id: str) -> None:
@@ -592,6 +603,11 @@ async def _handle_callback(callback: dict[str, Any]) -> None:
         if data == "cmd:test":
             await _answer_callback(callback_id, "Шлю тест…")
             await _send_test_card(chat_id)
+            return
+
+        if data == "cmd:stats":
+            await _answer_callback(callback_id, "Считаю…")
+            await _send_stats(chat_id)
             return
 
         if data.startswith("sync:"):
@@ -774,11 +790,16 @@ async def _handle_message(message: dict[str, Any]) -> None:
             await _send_test_card(chat_id)
             return
 
+        if cmd == "/stats":
+            await _send_stats(chat_id)
+            return
+
         if text.startswith("/"):
             await send_message(
                 "Команды:\n"
                 "/filters — мастер фильтров\n"
                 "/sync — выгрузка за период\n"
+                "/stats — статистика по сайтам и фильтрам\n"
                 "/status — текущий выбор\n"
                 "/test — тестовая карточка\n"
                 "/reset — сбросить всё"

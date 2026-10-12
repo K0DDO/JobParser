@@ -111,6 +111,8 @@ class VacancyOut(_MskJsonMixin):
     status: str
     matched_profiles: list[str] = Field(default_factory=list)
     application_status: str | None = None
+    last_seen_at: datetime | None = None
+    removed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

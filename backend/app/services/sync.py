@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.enums import ApplicationStatus, SourceName, VacancyStatus
@@ -71,6 +71,41 @@ def filter_by_lookback(
     return [item for item in items if within_lookback(item.published_at, lookback_days, now=stamp)]
 
 
+async def mark_missing_as_removed(
+    session: AsyncSession,
+    *,
+    source: str,
+    seen_ids: set[str],
+    lookback_days: int,
+    sync_started: datetime,
+) -> int:
+    """
+    Soft-delete vacancies from `source` that were expected in this lookback
+    window but did not appear in the current fetch. History is kept.
+    """
+    if not seen_ids:
+        return 0
+    cutoff = sync_started - timedelta(days=max(1, lookback_days))
+    result = await session.execute(
+        select(Vacancy).where(
+            Vacancy.source == source,
+            Vacancy.removed_at.is_(None),
+            Vacancy.source_vacancy_id.notin_(list(seen_ids)),
+            or_(Vacancy.published_at.is_(None), Vacancy.published_at >= cutoff),
+            Vacancy.last_seen_at.is_not(None),
+            Vacancy.last_seen_at < sync_started,
+        )
+    )
+    rows = list(result.scalars().all())
+    now = utc_now_naive()
+    for vac in rows:
+        vac.removed_at = now
+        vac.status = VacancyStatus.REMOVED
+    if rows:
+        await session.flush()
+    return len(rows)
+
+
 async def clear_stale_sync_lock(session: AsyncSession) -> bool:
     """If sync_in_progress stuck too long, clear it. Returns True if unlocked."""
     settings = await get_or_create_settings(session)
@@ -109,6 +144,7 @@ async def run_sync(*, triggered_by: str = "scheduler") -> dict:
         "updated": 0,
         "matched": 0,
         "queued": 0,
+        "removed": 0,
         "errors": [],
     }
     lock_held = True
@@ -134,6 +170,7 @@ async def run_sync(*, triggered_by: str = "scheduler") -> dict:
             new_vacancies: list[Vacancy] = []
             lookback_days = max(1, min(90, int(settings.sync_lookback_days or 7)))
             max_pages = sync_max_pages(lookback_days)
+            sync_started = utc_now_naive()
             await add_log(
                 session,
                 f"Sync lookback: last {lookback_days} day(s), max_pages={max_pages}",
@@ -202,6 +239,7 @@ async def run_sync(*, triggered_by: str = "scheduler") -> dict:
                 found = 0
                 created_count = 0
                 updated_count = 0
+                seen_ids: set[str] = set()
                 for data in vacancies_data:
                     try:
                         async with session.begin_nested():
@@ -212,6 +250,8 @@ async def run_sync(*, triggered_by: str = "scheduler") -> dict:
                         continue
                     found += 1
                     stats["fetched"] += 1
+                    if data.source_vacancy_id:
+                        seen_ids.add(str(data.source_vacancy_id))
                     if created:
                         created_count += 1
                         stats["created"] += 1
@@ -220,20 +260,35 @@ async def run_sync(*, triggered_by: str = "scheduler") -> dict:
                         updated_count += 1
                         stats["updated"] += 1
 
+                removed_count = 0
+                if seen_ids:
+                    removed_count = await mark_missing_as_removed(
+                        session,
+                        source=source_cfg.name,
+                        seen_ids=seen_ids,
+                        lookback_days=lookback_days,
+                        sync_started=sync_started,
+                    )
+                    stats["removed"] += removed_count
+
                 source_cfg.last_sync_at = utc_now_naive()
                 source_cfg.last_error = None
                 source_cfg.status = "ready"
                 source_cfg.found_today = (source_cfg.found_today or 0) + created_count
                 await add_log(
                     session,
-                    f"{source_cfg.display_name}: {found} vacancies ({created_count} new, {updated_count} updated)",
+                    f"{source_cfg.display_name}: {found} vacancies "
+                    f"({created_count} new, {updated_count} updated, {removed_count} removed)",
                     category="parser",
                 )
                 await session.commit()
 
             all_recent = (
                 await session.execute(
-                    select(Vacancy).order_by(Vacancy.updated_at.desc()).limit(500)
+                    select(Vacancy)
+                    .where(Vacancy.removed_at.is_(None))
+                    .order_by(Vacancy.updated_at.desc())
+                    .limit(500)
                 )
             ).scalars().all()
 
@@ -322,7 +377,7 @@ async def run_sync(*, triggered_by: str = "scheduler") -> dict:
                 session,
                 f"Sync finished (lookback={lookback_days}d): fetched={stats['fetched']} "
                 f"created={stats['created']} updated={stats['updated']} "
-                f"matched={stats['matched']} queued={stats['queued']}"
+                f"removed={stats['removed']} matched={stats['matched']} queued={stats['queued']}"
                 + (f" telegram={tg_sent}" if tg_sent else ""),
                 level="success",
                 category="sync",

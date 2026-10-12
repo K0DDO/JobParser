@@ -31,6 +31,8 @@ class Vacancy(Base):
         Index("ix_vacancies_status", "status"),
         Index("ix_vacancies_canonical_url", "canonical_url"),
         Index("ix_vacancies_fingerprint", "fingerprint"),
+        Index("ix_vacancies_removed_at", "removed_at"),
+        Index("ix_vacancies_last_seen_at", "last_seen_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -64,6 +66,8 @@ class Vacancy(Base):
 
     status: Mapped[str] = mapped_column(String(32), default="new", index=True)
     telegram_notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

@@ -252,8 +252,24 @@ def save_filters_to_settings(app_settings: Any, filters: dict[str, Any]) -> dict
 
 
 def filters_ready(filters: dict[str, Any]) -> bool:
-    """Рассылка только если выбрана хотя бы одна область."""
-    return bool(filters.get("roles"))
+    """Рассылка если выбран хотя бы один критерий (объединение / OR)."""
+    f = normalize_filters(filters)
+    return any(
+        [
+            bool(f["roles"]),
+            bool(f["skills"]),
+            bool(f["work_formats"]),
+            bool(f["experiences"]),
+            bool(f["sources"]),
+            bool(f["companies"]),
+            bool(f["cities"]),
+            bool(f["employment_types"]),
+            f["salary_from"] is not None,
+            f["salary_to"] is not None,
+            f["has_salary"] is not None,
+            f["max_age_hours"] is not None,
+        ]
+    )
 
 
 def _blob(vacancy: Any) -> str:
@@ -316,34 +332,150 @@ def format_filters_summary(
         else "—"
     )
 
-    status = "рассылка вкл" if filters_ready(f) else "выбери область — иначе рассылка выкл"
+    status = (
+        "рассылка вкл (OR)"
+        if filters_ready(f)
+        else "выбери любой критерий — иначе рассылка выкл"
+    )
 
     return (
         f"<b>Фильтры Telegram</b> · {status}\n\n"
-        f"1️⃣ Область: <b>{join_or(f['roles'], role_labels, 'не выбрана')}</b>\n"
-        f"2️⃣ Языки: <b>{join_or(langs, empty='любые')}</b>\n"
-        f"2️⃣ Фреймворки: <b>{join_or(fws + other_skills, empty='любые')}</b>\n"
-        f"Формат: <b>{join_or(f['work_formats'], fmt_labels, 'любой')}</b>\n"
-        f"Опыт: <b>{join_or(f['experiences'], exp_labels, 'любой')}</b>\n"
+        f"1️⃣ Область: <b>{join_or(f['roles'], role_labels, '—')}</b>\n"
+        f"2️⃣ Языки: <b>{join_or(langs, empty='—')}</b>\n"
+        f"2️⃣ Фреймворки: <b>{join_or(fws + other_skills, empty='—')}</b>\n"
+        f"Формат: <b>{join_or(f['work_formats'], fmt_labels, '—')}</b>\n"
+        f"Опыт: <b>{join_or(f['experiences'], exp_labels, '—')}</b>\n"
         f"Зарплата: <b>{salary_line}</b>\n"
-        f"Порталы: <b>{join_or(f['sources'], portal_labels, 'все')}</b>\n"
-        f"Компании: <b>{join_or(f['companies'], company_labels, 'все')}</b>\n"
-        f"Города: <b>{join_or(f['cities'], empty='все')}</b>\n"
-        f"Занятость: <b>{join_or(f['employment_types'], empl_labels, 'любая')}</b>\n"
+        f"Порталы: <b>{join_or(f['sources'], portal_labels, '—')}</b>\n"
+        f"Компании: <b>{join_or(f['companies'], company_labels, '—')}</b>\n"
+        f"Города: <b>{join_or(f['cities'], empty='—')}</b>\n"
+        f"Занятость: <b>{join_or(f['employment_types'], empl_labels, '—')}</b>\n"
         f"Свежесть карточек: <b>{age_line}</b>\n"
         f"Выгрузка (синк): <b>{lookback_line}</b>\n\n"
-        "Сначала область → стек → остальное. "
-        "Синк подгружает вакансии за выбранный период.\n"
-        "/filters · /sync · /test · /status · /reset"
+        "Критерии работают как <b>объединение (OR)</b>: "
+        "достаточно совпадения по любому выбранному.\n"
+        "/filters · /sync · /stats · /test · /status · /reset"
     )
+
+
+_ROLE_ALIASES = {
+    "analyst": ("analyst", "аналитик", "analysis", "аналитика"),
+    "data": ("data", "данн", "etl", "warehouse"),
+    "ml": ("machine learning", "ml ", " мл", "llm", "нейросет"),
+    "backend": ("backend", "бэкенд", "back-end", "бэк"),
+    "frontend": ("frontend", "фронтенд", "front-end", "фронт"),
+}
+
+
+def _match_roles(vacancy: Any, roles: list[str]) -> bool:
+    title = (getattr(vacancy, "title", None) or "").lower()
+    blob = _blob(vacancy)
+    for role in roles:
+        r = role.lower().strip()
+        if not r:
+            continue
+        if r in title or r in blob:
+            return True
+        if any(a in blob for a in _ROLE_ALIASES.get(r, ())):
+            return True
+    return False
+
+
+def _match_skills(vacancy: Any, skills: list[str]) -> bool:
+    blob = _blob(vacancy)
+    return any(skill.lower().strip() in blob for skill in skills if skill.strip())
+
+
+def _match_work_formats(vacancy: Any, formats: list[str]) -> bool:
+    fmt = (getattr(vacancy, "work_format", None) or "unknown").lower()
+    remote = bool(getattr(vacancy, "remote", False))
+    allowed = {x.lower() for x in formats}
+    if "remote" in allowed and (remote or fmt == "remote"):
+        return True
+    return fmt in allowed
+
+
+def _match_experiences(vacancy: Any, experiences: list[str]) -> bool:
+    exp = getattr(vacancy, "experience", None) or ""
+    return exp in experiences
+
+
+def _match_sources(vacancy: Any, sources: list[str]) -> bool:
+    src = (getattr(vacancy, "source", None) or "").lower()
+    return src in {s.lower() for s in sources}
+
+
+def _match_companies(vacancy: Any, companies: list[str]) -> bool:
+    company = (getattr(vacancy, "company", None) or "").lower()
+    return any(c.lower() in company for c in companies)
+
+
+def _match_cities(vacancy: Any, cities: list[str]) -> bool:
+    city = (getattr(vacancy, "city", None) or "").lower()
+    remote = bool(getattr(vacancy, "remote", False))
+    fmt = (getattr(vacancy, "work_format", None) or "").lower()
+    for c in cities:
+        cl = c.lower()
+        if cl in {"remote", "удалённо", "удаленно"} and (remote or fmt == "remote"):
+            return True
+        if cl in city:
+            return True
+    return False
+
+
+def _match_employment(vacancy: Any, types: list[str]) -> bool:
+    emp = (getattr(vacancy, "employment_type", None) or "").lower()
+    return any(e.lower() in emp for e in types)
+
+
+def _match_salary(vacancy: Any, *, salary_from: int | None, salary_to: int | None, has_salary: bool | None) -> bool:
+    vac_from_raw = getattr(vacancy, "salary_from", None)
+    vac_to_raw = getattr(vacancy, "salary_to", None)
+    if has_salary is True and vac_from_raw is None and vac_to_raw is None:
+        return False
+    if has_salary is False and (vac_from_raw is not None or vac_to_raw is not None):
+        return False
+    if salary_from is None and salary_to is None and has_salary is None:
+        return False
+    if salary_from is None and salary_to is None:
+        return has_salary is not None
+    from app.services.currency import salary_in_rub
+
+    vac_from, vac_to, _ = salary_in_rub(
+        vac_from_raw,
+        vac_to_raw,
+        getattr(vacancy, "currency", None),
+    )
+    if vac_from is None and vac_to is None:
+        return False
+    if salary_from is not None:
+        vac_max = vac_to if vac_to is not None else vac_from
+        if vac_max is not None and vac_max < salary_from:
+            return False
+    if salary_to is not None:
+        vac_min = vac_from if vac_from is not None else vac_to
+        if vac_min is not None and vac_min > salary_to:
+            return False
+    return True
+
+
+def _match_age(vacancy: Any, max_age_hours: int) -> bool:
+    published = getattr(vacancy, "published_at", None)
+    if published is None:
+        return False
+    cutoff = utc_now_naive() - timedelta(hours=int(max_age_hours))
+    pub = published.replace(tzinfo=None) if getattr(published, "tzinfo", None) else published
+    return pub >= cutoff
 
 
 def vacancy_matches_telegram_filters(vacancy: Any, filters: dict[str, Any] | None = None, **legacy: Any) -> bool:
     """
     True if vacancy fits Telegram selections.
-    Empty roles => no notify.
-    Accepts legacy kwargs roles=/work_formats= for old call sites.
+    Groups are combined with OR (union): any matching selected group is enough.
+    Within a group values are also OR. Removed vacancies never match.
     """
+    if getattr(vacancy, "removed_at", None) is not None:
+        return False
     if filters is None:
         filters = {
             "roles": legacy.get("roles") or [],
@@ -354,113 +486,33 @@ def vacancy_matches_telegram_filters(vacancy: Any, filters: dict[str, Any] | Non
     if not filters_ready(f):
         return False
 
-    title = (getattr(vacancy, "title", None) or "").lower()
-    blob = _blob(vacancy)
-
-    if not any(role.lower().strip() in title or role.lower().strip() in blob for role in f["roles"]):
-        # Analyst / Data often in title as "аналитик"
-        role_aliases = {
-            "analyst": ("analyst", "аналитик", "analysis", "аналитика"),
-            "data": ("data", "данн", "etl", "warehouse"),
-            "ml": ("machine learning", "ml ", " мл", "llm", "нейросет"),
-            "backend": ("backend", "бэкенд", "back-end", "бэк"),
-            "frontend": ("frontend", "фронтенд", "front-end", "фронт"),
-        }
-        ok_role = False
-        for role in f["roles"]:
-            aliases = role_aliases.get(role.lower().strip(), ())
-            if any(a in blob for a in aliases):
-                ok_role = True
-                break
-        if not ok_role:
-            return False
-
+    clauses: list[bool] = []
+    if f["roles"]:
+        clauses.append(_match_roles(vacancy, f["roles"]))
     if f["skills"]:
-        if not any(skill.lower().strip() in blob for skill in f["skills"]):
-            return False
-
+        clauses.append(_match_skills(vacancy, f["skills"]))
     if f["work_formats"]:
-        fmt = (getattr(vacancy, "work_format", None) or "unknown").lower()
-        remote = bool(getattr(vacancy, "remote", False))
-        allowed = {x.lower() for x in f["work_formats"]}
-        matched_fmt = False
-        if "remote" in allowed and (remote or fmt == "remote"):
-            matched_fmt = True
-        if fmt in allowed:
-            matched_fmt = True
-        if not matched_fmt:
-            return False
-
+        clauses.append(_match_work_formats(vacancy, f["work_formats"]))
     if f["experiences"]:
-        exp = getattr(vacancy, "experience", None) or ""
-        if exp not in f["experiences"]:
-            return False
-
+        clauses.append(_match_experiences(vacancy, f["experiences"]))
     if f["sources"]:
-        src = (getattr(vacancy, "source", None) or "").lower()
-        if src not in {s.lower() for s in f["sources"]}:
-            return False
-
+        clauses.append(_match_sources(vacancy, f["sources"]))
     if f["companies"]:
-        company = (getattr(vacancy, "company", None) or "").lower()
-        if not any(c.lower() in company for c in f["companies"]):
-            return False
-
+        clauses.append(_match_companies(vacancy, f["companies"]))
     if f["cities"]:
-        city = (getattr(vacancy, "city", None) or "").lower()
-        remote = bool(getattr(vacancy, "remote", False))
-        fmt = (getattr(vacancy, "work_format", None) or "").lower()
-        city_ok = False
-        for c in f["cities"]:
-            cl = c.lower()
-            if cl in {"remote", "удалённо", "удаленно"} and (remote or fmt == "remote"):
-                city_ok = True
-                break
-            if cl in city:
-                city_ok = True
-                break
-        if not city_ok:
-            return False
-
+        clauses.append(_match_cities(vacancy, f["cities"]))
     if f["employment_types"]:
-        emp = (getattr(vacancy, "employment_type", None) or "").lower()
-        if not any(e.lower() in emp for e in f["employment_types"]):
-            return False
-
-    if f["has_salary"] is True:
-        if getattr(vacancy, "salary_from", None) is None and getattr(vacancy, "salary_to", None) is None:
-            return False
-    if f["has_salary"] is False:
-        if getattr(vacancy, "salary_from", None) is not None or getattr(vacancy, "salary_to", None) is not None:
-            return False
-
-    if f["salary_from"] is not None or f["salary_to"] is not None:
-        from app.services.currency import salary_in_rub
-
-        vac_from, vac_to, _ = salary_in_rub(
-            getattr(vacancy, "salary_from", None),
-            getattr(vacancy, "salary_to", None),
-            getattr(vacancy, "currency", None),
+        clauses.append(_match_employment(vacancy, f["employment_types"]))
+    if f["salary_from"] is not None or f["salary_to"] is not None or f["has_salary"] is not None:
+        clauses.append(
+            _match_salary(
+                vacancy,
+                salary_from=f["salary_from"],
+                salary_to=f["salary_to"],
+                has_salary=f["has_salary"],
+            )
         )
-        if vac_from is None and vac_to is None:
-            return False
-        if f["salary_from"] is not None:
-            vac_max = vac_to if vac_to is not None else vac_from
-            if vac_max is not None and vac_max < f["salary_from"]:
-                return False
-        if f["salary_to"] is not None:
-            vac_min = vac_from if vac_from is not None else vac_to
-            if vac_min is not None and vac_min > f["salary_to"]:
-                return False
-
     if f["max_age_hours"] is not None:
-        published = getattr(vacancy, "published_at", None)
-        if published is None:
-            return False
-        cutoff = utc_now_naive() - timedelta(hours=int(f["max_age_hours"]))
-        # published may be aware/naive
-        pub = published.replace(tzinfo=None) if getattr(published, "tzinfo", None) else published
-        if pub < cutoff:
-            return False
+        clauses.append(_match_age(vacancy, f["max_age_hours"]))
 
-    return True
+    return any(clauses) if clauses else False

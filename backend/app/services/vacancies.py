@@ -47,6 +47,8 @@ def vacancy_to_out(
         status=v.status,
         matched_profiles=matched_profiles or [],
         application_status=application_status,
+        last_seen_at=getattr(v, "last_seen_at", None),
+        removed_at=getattr(v, "removed_at", None),
         created_at=v.created_at,
         updated_at=v.updated_at,
     )
@@ -56,10 +58,17 @@ async def get_dashboard_stats(session: AsyncSession) -> DashboardStats:
     settings = await get_or_create_settings(session)
     today = msk_today_start_utc_naive()
 
-    total = (await session.execute(select(func.count(Vacancy.id)))).scalar_one()
+    total = (
+        await session.execute(
+            select(func.count(Vacancy.id)).where(Vacancy.removed_at.is_(None))
+        )
+    ).scalar_one()
     new_today = (
         await session.execute(
-            select(func.count(Vacancy.id)).where(Vacancy.collected_at >= today)
+            select(func.count(Vacancy.id)).where(
+                Vacancy.collected_at >= today,
+                Vacancy.removed_at.is_(None),
+            )
         )
     ).scalar_one()
     matched = (
@@ -168,6 +177,7 @@ def build_vacancy_filters(
     max_age_hours: int | None = None,
     has_salary: bool | None = None,
     employment_type: str | list[str] | None = None,
+    include_removed: bool = False,
     now: datetime | None = None,
 ) -> list[Any]:
     filters: list[Any] = []
@@ -181,6 +191,8 @@ def build_vacancy_filters(
     employment_types = _as_list(employment_type)
     companies = _as_list(company)
 
+    if not include_removed:
+        filters.append(Vacancy.removed_at.is_(None))
     if sources:
         filters.append(Vacancy.source.in_(sources))
     if statuses:
@@ -286,6 +298,7 @@ async def list_vacancies(
     employment_type: str | list[str] | None = None,
     application_status: str | list[str] | None = None,
     profile_id: int | str | list[int] | list[str] | None = None,
+    include_removed: bool = False,
     sort: str = "published_at",
 ) -> tuple[list[VacancyOut], int]:
     stmt = select(Vacancy)
@@ -307,6 +320,7 @@ async def list_vacancies(
         max_age_hours=max_age_hours,
         has_salary=has_salary,
         employment_type=employment_type,
+        include_removed=include_removed,
     )
 
     app_statuses = _as_list(application_status)
