@@ -354,7 +354,7 @@ def format_filters_summary(
         f"Выгрузка (синк): <b>{lookback_line}</b>\n\n"
         "Критерии работают как <b>объединение (OR)</b>: "
         "достаточно совпадения по любому выбранному.\n"
-        "/filters · /sync · /stats · /test · /status · /reset"
+        "/filters · /browse · /sync · /stats · /test · /status · /reset"
     )
 
 

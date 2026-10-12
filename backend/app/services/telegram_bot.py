@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -15,7 +17,13 @@ from app.db.session import AsyncSessionLocal
 from app.models import Vacancy
 from app.services.settings_service import get_or_create_settings
 from app.services.telegram import send_message, telegram_configured
-from app.services.telegram_cards import build_caption, render_banner_png
+from app.services.telegram_cards import (
+    build_caption,
+    format_salary_line,
+    render_banner_png,
+    truncate_text,
+    work_format_label,
+)
 from app.services.telegram_filters import (
     TELEGRAM_AGE_HOURS,
     TELEGRAM_CITIES,
@@ -31,6 +39,7 @@ from app.services.telegram_filters import (
     TELEGRAM_SYNC_LOOKBACK,
     TELEGRAM_WORK_FORMATS,
     empty_filters,
+    filters_ready,
     format_filters_summary,
     load_filters_from_settings,
     save_filters_to_settings,
@@ -42,6 +51,19 @@ logger = logging.getLogger(__name__)
 TELEGRAM_API = "https://api.telegram.org"
 _poll_task: asyncio.Task | None = None
 _stop = asyncio.Event()
+
+BROWSE_SCAN_LIMIT = 3000
+BROWSE_MAX_RESULTS = 200
+
+
+@dataclass
+class BrowseSession:
+    ids: list[int] = field(default_factory=list)
+    index: int = 0
+    message_id: int | None = None
+
+
+_browse_sessions: dict[str, BrowseSession] = {}
 
 ROLE_KEYS = {k for k, _ in TELEGRAM_ROLES}
 STACK_KEYS = set(TELEGRAM_LANGUAGES + TELEGRAM_FRAMEWORKS)
@@ -138,11 +160,34 @@ def _main_keyboard(
             _btn(f"Занятость ({len(filters['employment_types'])})", "m:empl"),
             _btn("Свежесть", "m:age"),
         ],
+        [_btn("🔎 Вакансии по фильтрам", "cmd:browse")],
         [
             _btn("📊 Статистика", "cmd:stats"),
             _btn("🧪 Тестовая вакансия", "cmd:test"),
         ],
         [_btn("🧹 Сбросить всё", "c:all")],
+    ]
+    return {"inline_keyboard": rows}
+
+
+def _browse_keyboard(session: BrowseSession) -> dict[str, Any]:
+    total = len(session.ids)
+    pos = session.index + 1 if total else 0
+    rows = [
+        [
+            _btn("⏮", "br:first"),
+            _btn("◀️", "br:prev"),
+            _btn(f"{pos}/{total}", "noop"),
+            _btn("▶️", "br:next"),
+            _btn("⏭", "br:last"),
+        ],
+        [
+            _btn("📸 Карточка", "br:card"),
+            _btn("🔄 Обновить список", "br:reload"),
+        ],
+        [
+            _btn("⬅️ Меню", "m:main"),
+        ],
     ]
     return {"inline_keyboard": rows}
 
@@ -388,7 +433,7 @@ async def _edit_or_send(
     text: str,
     reply_markup: dict[str, Any],
     message_id: int | None = None,
-) -> None:
+) -> int | None:
     payload = {
         "chat_id": chat_id,
         "text": text[:4096],
@@ -400,10 +445,13 @@ async def _edit_or_send(
         payload["message_id"] = str(message_id)
         try:
             await _api("editMessageText", payload)
-            return
+            return int(message_id)
         except Exception:  # noqa: BLE001
             pass
-    await _api("sendMessage", payload)
+    body = await _api("sendMessage", payload)
+    result = body.get("result") or {}
+    mid = result.get("message_id")
+    return int(mid) if mid is not None else None
 
 
 async def _show_menu(
@@ -477,6 +525,145 @@ async def _send_stats(chat_id: str) -> None:
     async with AsyncSessionLocal() as session:
         stats = await collect_vacancy_stats(session)
     await send_message(format_stats_message(stats))
+
+
+async def _load_matching_vacancy_ids(filters: dict[str, Any]) -> list[int]:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Vacancy)
+            .where(Vacancy.removed_at.is_(None))
+            .order_by(Vacancy.published_at.desc().nullslast(), Vacancy.id.desc())
+            .limit(BROWSE_SCAN_LIMIT)
+        )
+        vacancies = list(result.scalars().all())
+    matched = [
+        int(v.id)
+        for v in vacancies
+        if v.id is not None and vacancy_matches_telegram_filters(v, filters)
+    ]
+    return matched[:BROWSE_MAX_RESULTS]
+
+
+def _format_browse_text(vacancy: Vacancy, *, index: int, total: int) -> str:
+    title = html.escape((vacancy.title or "Вакансия").strip())
+    company = html.escape((vacancy.company or "—").strip())
+    url = html.escape((vacancy.url or "").strip(), quote=True)
+    salary = html.escape(
+        format_salary_line(vacancy.salary_from, vacancy.salary_to, vacancy.currency)
+    )
+    city = html.escape((vacancy.city or "—").strip())
+    fmt = html.escape(work_format_label(vacancy.work_format, remote=bool(vacancy.remote)))
+    source = html.escape(str(vacancy.source or "?"))
+    skills = [str(s).strip() for s in (vacancy.skills or []) if str(s).strip()]
+    skills_line = html.escape(", ".join(skills[:10])) if skills else "—"
+    desc = html.escape(truncate_text(vacancy.description, 220) or "—")
+    link = f'<a href="{url}">{title}</a>' if url else title
+    return (
+        f"<b>Найдено {total}</b> · лист <b>{index + 1}/{total}</b>\n\n"
+        f"{link}\n"
+        f"<b>{company}</b>\n"
+        f"{salary}\n"
+        f"📍 {city} · 🏢 {fmt} · {source}\n\n"
+        f"<b>Стек:</b> {skills_line}\n"
+        f"{desc}"
+    )
+
+
+async def _get_vacancy_by_id(vacancy_id: int) -> Vacancy | None:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(Vacancy).where(Vacancy.id == vacancy_id))
+        return result.scalar_one_or_none()
+
+
+async def _show_browse(
+    chat_id: str,
+    *,
+    message_id: int | None = None,
+    reload: bool = False,
+) -> None:
+    async with AsyncSessionLocal() as session:
+        app_settings = await get_or_create_settings(session)
+        filters = load_filters_from_settings(app_settings)
+
+    if not filters_ready(filters):
+        await send_message(
+            "Сначала выбери фильтры в /filters — хотя бы один критерий.\n"
+            "Потом жми «🔎 Вакансии по фильтрам»."
+        )
+        return
+
+    browse = _browse_sessions.get(chat_id)
+    if reload or browse is None or not browse.ids:
+        ids = await _load_matching_vacancy_ids(filters)
+        browse = BrowseSession(ids=ids, index=0, message_id=message_id)
+        _browse_sessions[chat_id] = browse
+    else:
+        if message_id is not None:
+            browse.message_id = message_id
+
+    if not browse.ids:
+        text = (
+            "По текущим фильтрам <b>0</b> вакансий.\n"
+            "Расширь критерии (OR) или запусти /sync."
+        )
+        mid = await _edit_or_send(
+            chat_id, text, _browse_keyboard(browse), message_id=browse.message_id
+        )
+        if mid is not None:
+            browse.message_id = mid
+        return
+
+    browse.index = max(0, min(browse.index, len(browse.ids) - 1))
+    vacancy = await _get_vacancy_by_id(browse.ids[browse.index])
+    if vacancy is None:
+        # stale id — drop and reload
+        browse.ids.pop(browse.index)
+        if not browse.ids:
+            mid = await _edit_or_send(
+                chat_id,
+                "Список устарел — вакансий не осталось. Жми «Обновить список».",
+                _browse_keyboard(browse),
+                message_id=browse.message_id,
+            )
+            if mid is not None:
+                browse.message_id = mid
+            return
+        browse.index = min(browse.index, len(browse.ids) - 1)
+        vacancy = await _get_vacancy_by_id(browse.ids[browse.index])
+        if vacancy is None:
+            await send_message("Не удалось загрузить вакансию.")
+            return
+
+    text = _format_browse_text(vacancy, index=browse.index, total=len(browse.ids))
+    mid = await _edit_or_send(
+        chat_id,
+        text,
+        _browse_keyboard(browse),
+        message_id=browse.message_id,
+    )
+    if mid is not None:
+        browse.message_id = mid
+
+
+async def _browse_send_card(chat_id: str) -> None:
+    browse = _browse_sessions.get(chat_id)
+    if not browse or not browse.ids:
+        await send_message("Сначала открой список: /browse")
+        return
+    vacancy = await _get_vacancy_by_id(browse.ids[browse.index])
+    if vacancy is None:
+        await send_message("Вакансия не найдена, обнови список.")
+        return
+    caption = build_caption(vacancy, profile_name="фильтр")
+    photo = render_banner_png(vacancy)
+    data = {
+        "chat_id": chat_id,
+        "caption": caption[:1024],
+        "parse_mode": "HTML",
+        "disable_web_page_preview": "true",
+    }
+    files = {"photo": (f"vacancy_{vacancy.id}.png", photo, "image/png")}
+    await _api("sendPhoto", data, files=files)
 
 
 async def _send_test_card(chat_id: str) -> None:
@@ -608,6 +795,42 @@ async def _handle_callback(callback: dict[str, Any]) -> None:
         if data == "cmd:stats":
             await _answer_callback(callback_id, "Считаю…")
             await _send_stats(chat_id)
+            return
+
+        if data == "cmd:browse":
+            await _answer_callback(callback_id, "Ищу…")
+            await _show_browse(chat_id, reload=True)
+            return
+
+        if data.startswith("br:"):
+            action = data.split(":", 1)[1]
+            browse = _browse_sessions.get(chat_id)
+            if action == "reload":
+                await _answer_callback(callback_id, "Обновляю…")
+                await _show_browse(chat_id, message_id=message_id, reload=True)
+                return
+            if action == "card":
+                await _answer_callback(callback_id, "Карточка…")
+                await _browse_send_card(chat_id)
+                return
+            if browse is None or not browse.ids:
+                await _answer_callback(callback_id, "Обнови список")
+                await _show_browse(chat_id, message_id=message_id, reload=True)
+                return
+            if action == "prev":
+                browse.index = (browse.index - 1) % len(browse.ids)
+            elif action == "next":
+                browse.index = (browse.index + 1) % len(browse.ids)
+            elif action == "first":
+                browse.index = 0
+            elif action == "last":
+                browse.index = len(browse.ids) - 1
+            else:
+                await _answer_callback(callback_id)
+                return
+            browse.message_id = message_id
+            await _answer_callback(callback_id, f"{browse.index + 1}/{len(browse.ids)}")
+            await _show_browse(chat_id, message_id=message_id, reload=False)
             return
 
         if data.startswith("sync:"):
@@ -794,10 +1017,15 @@ async def _handle_message(message: dict[str, Any]) -> None:
             await _send_stats(chat_id)
             return
 
+        if cmd in {"/browse", "/vacancies", "/list"}:
+            await _show_browse(chat_id, reload=True)
+            return
+
         if text.startswith("/"):
             await send_message(
                 "Команды:\n"
                 "/filters — мастер фильтров\n"
+                "/browse — листать вакансии по фильтрам\n"
                 "/sync — выгрузка за период\n"
                 "/stats — статистика по сайтам и фильтрам\n"
                 "/status — текущий выбор\n"
